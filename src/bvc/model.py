@@ -174,3 +174,46 @@ class Config:
     compression: str = "auto"                           # 既定の圧縮("auto", "zlib", "none")
     verify_chunks: str = "exists"                       # チャンク検証の強度("exists", "full")
     threads: int = 0                                    # ワーカースレッド数(0 = CPU数)
+
+
+@dataclass(frozen=True, slots=True)
+class BranchInfo:
+    # ブランチの情報。設計書 3.1節。
+
+    number: int              # ブランチ番号
+    name: str | None         # ブランチ名(無ければ None)
+    tip: int                 # 先端の版番号
+    parent_tip: int | None   # 親ブランチの先端の版番号(分岐元。無ければ None)
+
+
+@dataclass(slots=True)
+class DiscardResult:
+    # discard コマンドの結果。設計書 3.1節。
+
+    changed: bool                      # 削除状態が変わったか
+    before: Head                       # 操作前の位置とブランチ(削除前なら @)
+    after: Head                        # 操作後の位置とブランチ(削除された場合のみ復元される)
+    auto_commit: Commit | None = None  # 自動コミット(現在位置が削除された場合)
+    restored: list[str] = field(default_factory=list)  # 復元されたパス(ある場合)
+    deleted: list[str] = field(default_factory=list)   # 削除されたパス(ある場合)
+
+
+@dataclass(slots=True)
+class GcReport:
+    # gc コマンドの結果。設計書 3.1節。
+
+    deleted_commits: list[int] = field(default_factory=list)  # 削除した版番号
+    deleted_manifests: int = 0                                 # 削除したマニフェスト数
+    deleted_chunks: int = 0                                    # 削除したチャンク数
+    cleaned_tmp: int = 0                                       # 削除した tmp の残骸数
+    freed_bytes: int = 0                                       # 解放したバイト数
+
+
+@dataclass(slots=True)
+class VerifyReport:
+    # verify コマンドの結果。設計書 3.1節。
+
+    store: StoreVerifyResult = field(default_factory=StoreVerifyResult)
+    bad_commits: list[int] = field(default_factory=list)       # 破損した版番号
+    repaired_chunks: int = 0                                   # 修復したチャンク数
+    repaired_bytes: int = 0                                    # 修復したバイト数

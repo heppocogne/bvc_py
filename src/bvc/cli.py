@@ -138,6 +138,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)")
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
+    # M4-A: 履歴操作
+    p = sub.add_parser("note", help="版にコメントを追記する")
+    p.add_argument("-m", "--message", required=True, metavar="<text>", dest="text", help="コメント本文")
+    p.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
+
+    p = sub.add_parser("branch", help="ブランチを操作する")
+    branch_sub = p.add_subparsers(dest="branch_command", metavar="<サブコマンド>", title="ブランチサブコマンド")
+    bp = branch_sub.add_parser("list", help="ブランチ一覧を表示")
+    bp = branch_sub.add_parser("name", help="ブランチに名前を付ける")
+    bp.add_argument("name", metavar="<名前>", help="ブランチ名")
+    bp.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    bp = branch_sub.add_parser("unname", help="ブランチ名を削除する")
+    bp.add_argument("name", metavar="<名前>", help="ブランチ名")
+
+    p = sub.add_parser("discard", help="版に削除印を付ける")
+    p.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    p.add_argument("--force", action="store_true", help="確認を省略する(未実装)")
+    p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+
+    p = sub.add_parser("gc", help="不要なデータを削除する")
+    p.add_argument("--dry-run", action="store_true", help="実行せず予測結果だけを表示する")
+    p.add_argument("--no-git", action="store_true", help="git の履歴を保護対象に含めない")
+
     return parser
 
 
@@ -177,6 +200,14 @@ def run(argv: list[str] | None = None) -> int:
             return _cmd_log(args, start)
         if args.command in ("undo", "redo", "goto"):
             return _cmd_move(args, start)
+        if args.command == "note":
+            return _cmd_note(args, start)
+        if args.command == "branch":
+            return _cmd_branch(args, start)
+        if args.command == "discard":
+            return _cmd_discard(args, start)
+        if args.command == "gc":
+            return _cmd_gc(args, start)
         logger.error("不明なコマンドです: %s", args.command)
         return EXIT_USAGE
     except BvcError as e:
@@ -293,6 +324,89 @@ def _cmd_move(args: argparse.Namespace, start: Path) -> int:
         return EXIT_OK
     for line in format_move(result):
         logger.info("%s", line)
+    return EXIT_OK
+
+
+def _cmd_note(args: argparse.Namespace, start: Path) -> int:
+    # M4-1: コメントを追記する。
+    with Repo.open(start) as repo:
+        note = repo.note(args.text, rev=args.rev)
+    if args.json:
+        _print_json({"changed": True, "note": {"commit_id": note.commit_id, "time": note.time, "text": note.text}})
+    else:
+        logger.info("版 %d にコメントを追記しました", note.commit_id)
+    return EXIT_OK
+
+
+def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
+    # M4-2: ブランチを操作する。
+    with Repo.open(start) as repo:
+        if args.branch_command == "list" or args.branch_command is None:
+            branches = repo.branches()
+            if args.json:
+                _print_json(
+                    {
+                        "changed": False,
+                        "branches": [asdict(b) for b in branches],
+                    }
+                )
+            else:
+                if not branches:
+                    logger.info("ブランチがありません")
+                else:
+                    for b in branches:
+                        name_part = f" [{b.name}]" if b.name else ""
+                        logger.info("ブランチ %d%s: 先端 %d", b.number, name_part, b.tip)
+        elif args.branch_command == "name":
+            result = repo.name_branch(args.name, rev=args.rev)
+            if args.json:
+                _print_json({"changed": True, "branch": asdict(result)})
+            else:
+                logger.info("ブランチ %d に名前 '%s' を付けました", result.number, result.name)
+        elif args.branch_command == "unname":
+            repo.unname_branch(args.name)
+            if args.json:
+                _print_json({"changed": True})
+            else:
+                logger.info("ブランチ名 '%s' を削除しました", args.name)
+    return EXIT_OK
+
+
+def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
+    # M4-3: 削除印を付ける。
+    with Repo.open(start) as repo:
+        result = repo.discard(rev=args.rev, allow_missing=args.allow_missing)
+    if args.json:
+        _print_json(result)
+        return EXIT_OK
+    if not result.changed:
+        logger.info("変更なし")
+    elif result.restored:
+        logger.info("版 %d に削除印を付けました(親の版 %d に移動)", result.before.at, result.after.at)
+        for line in _change_lines(WorkState(tree={}, modified=[], added=[], renamed=[], missing=result.deleted), deleted_label="deleted"):
+            logger.info("  %s", line)
+    else:
+        logger.info("版 %d に削除印を付けました", result.before.at)
+    return EXIT_OK
+
+
+def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
+    # M4-4: ガベージコレクション。
+    with Repo.open(start) as repo:
+        result = repo.gc(dry_run=args.dry_run, no_git=args.no_git)
+    if args.json:
+        _print_json(result)
+        return EXIT_OK
+    if not result.deleted_commits and not result.deleted_manifests and not result.deleted_chunks:
+        logger.info("削除対象がありません")
+    else:
+        logger.info(
+            "削除しました: 版 %d、マニフェスト %d、チャンク %d、%s",
+            len(result.deleted_commits),
+            result.deleted_manifests,
+            result.deleted_chunks,
+            format_size(result.freed_bytes),
+        )
     return EXIT_OK
 
 

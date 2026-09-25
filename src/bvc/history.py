@@ -293,8 +293,20 @@ class History:
         return pinned
 
     def get_notes(self, commit_id: int) -> list[Note]:
-        # コメントの読み込みは M4 で実装する。
-        return []
+        # コメント(notes/<id>.jsonl)を読み込む(M4-1)。
+        notes_file = self._bvc_dir / "notes" / f"{commit_id}.jsonl"
+        if not notes_file.exists():
+            return []
+        records, warns = read_jsonl(notes_file, f"notes/{commit_id}.jsonl")
+        for w in warns:
+            logger.warning("%s", w)
+        notes = []
+        for r in records:
+            try:
+                notes.append(Note(commit_id=commit_id, time=r["time"], text=r["text"]))
+            except (KeyError, TypeError):
+                logger.warning("notes/%d.jsonl: 不正なコメント記録を読み飛ばしました: %r", commit_id, r)
+        return notes
 
     # --- リビジョン式(M2-5、仕様書 2.3節、設計書 4.5節) ---
 
@@ -452,16 +464,57 @@ class History:
     # --- M4 以降 ---
 
     def add_note(self, commit_id: int, text: str) -> Note:
-        raise NotImplementedError("note は M4 で実装する")
+        # コメントを追記する(M4-1、設計書 2.6節)。
+        # 壊れた版にもコメントを付けられる。ファイルが無いなら新規作成。
+        notes_dir = self._bvc_dir / "notes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+        note = Note(commit_id=commit_id, time=now_iso(), text=text)
+        append_jsonl(
+            notes_dir / f"{commit_id}.jsonl",
+            {"format": 1, "time": note.time, "text": note.text},
+        )
+        return note
 
     def discard(self, commit_id: int) -> None:
-        raise NotImplementedError("discard は M4 で実装する")
+        # 削除印を付ける(M4-3、設計書 2.6節・4.11節)。
+        if commit_id not in self._commits:
+            raise RevisionError(f"版 {commit_id} は存在しません")
+        if commit_id in self._discarded:
+            raise RevisionError(f"版 {commit_id} は既に削除済みです")
+        append_jsonl(self._bvc_dir / "discarded.jsonl", {"format": 1, "time": now_iso(), "id": commit_id})
+        self._discarded.add(commit_id)
+        # discarded を更新したので、つなぎ直しを再計算する
+        self._rebuild()
 
     def name_branch(self, branch: int, name: str) -> None:
-        raise NotImplementedError("branch は M4 で実装する")
+        # ブランチに名前を付ける(M4-2、設計書 2.4節)。
+        # 既存の名前を付け替える場合は、古い名前を削除する。
+        name = check_branch_name(name)
+        # 別のブランチが同じ名前を持つ場合は削除
+        for bid, bname in list(self._branches.items()):
+            if bname == name:
+                del self._branches[bid]
+        self._branches[branch] = name
+        # branches.json に書き込む
+        self._write_branches()
 
     def unname_branch(self, name: str) -> None:
-        raise NotImplementedError("branch は M4 で実装する")
+        # ブランチ名を削除する(M4-2)。
+        name = check_branch_name(name)
+        for bid, bname in list(self._branches.items()):
+            if bname == name:
+                del self._branches[bid]
+                self._write_branches()
+                return
+        raise RevisionError(f"ブランチ名 '{name}' はありません")
+
+    def _write_branches(self) -> None:
+        # branches.json を書き込む。
+        atomic_write_json(
+            self._bvc_dir / "branches.json",
+            {"format": 1, "names": self._branches},
+            self._tmp,
+        )
 
     def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> None:
         raise NotImplementedError("pin は M6 で実装する")

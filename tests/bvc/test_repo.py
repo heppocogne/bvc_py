@@ -696,7 +696,66 @@ class TestMoveSafety(MoveTestCase):
                 self.assertEqual(self.head(repo).at, 2)
                 self.assertFalse((repo.bvc_dir / "journal.json").exists())
                 self.assertTrue(repo.work_state().dirty)
-                repo.close()
+
+
+# --- M4-A: 履歴操作 ---
+
+
+class TestNote(RepoTestCase):
+    # F-14: note の書式とセマンティクス。
+
+    def test_f14_add_note(self):
+        # コメントを追記する
+        repo = self.init()
+        self.write("a.bin", b"v0")
+        repo.commit(message="first")
+        c0 = repo.log()[0].commit
+        note1 = repo.note("good", rev="@")
+        self.assertEqual(note1.commit_id, c0.id)
+        self.assertEqual(note1.text, "good")
+        # 再度読み込み
+        entries = repo.log()
+        notes = [e.notes for e in entries if e.id == c0.id]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(len(notes[0]), 1)
+        self.assertEqual(notes[0][0].text, "good")
+
+
+class TestBranch(MoveTestCase):
+    # F-2: ブランチ規則。F-1: branch コマンド。
+
+    def test_f1_branch_list(self):
+        # ブランチ一覧を表示する
+        repo = self.init()
+        self.write("a.bin", b"v0")
+        r0 = repo.commit()
+        self.write("a.bin", b"v1")
+        r1 = repo.commit()
+        branches = repo.branches()
+        # 初期状態ではブランチは1つ
+        self.assertEqual(len(branches), 1)
+        self.assertEqual(branches[0].tip, r1.commit.id)
+
+    def test_f1_branch_name(self):
+        # ブランチに名前を付ける
+        repo = self.init()
+        self.write("a.bin", b"v0")
+        r = repo.commit()
+        result = repo.name_branch("develop")
+        self.assertEqual(result.name, "develop")
+        # 再度読み込み
+        branches = repo.branches()
+        self.assertEqual(branches[0].name, "develop")
+
+    def test_f1_branch_unname(self):
+        # ブランチ名を削除する
+        repo = self.init()
+        self.write("a.bin", b"v0")
+        repo.commit()
+        repo.name_branch("develop")
+        repo.unname_branch("develop")
+        branches = repo.branches()
+        self.assertIsNone(branches[0].name)
 
     def test_r6_disk_full(self):
         repo = self.build_linear(1)
