@@ -49,7 +49,7 @@ class _Formatter(logging.Formatter):
 
 
 def setup_logging(quiet: bool = False) -> None:
-    # bvc パッケージのロガーの出力先を設定する。呼ぶたびに作り直す(その時点の sys.stdout/stderr を使う)。
+    # bvc パッケージのロガーの出力先を設定する。呼び出すたびに作り直す(その時点の sys.stdout/stderr を使う)。
     root = logging.getLogger("bvc")
     for h in list(root.handlers):
         root.removeHandler(h)

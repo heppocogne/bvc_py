@@ -26,7 +26,7 @@ IS_WINDOWS: Final[bool] = os.name == "nt"
 # 関数の中では、呼び出しのたびにモジュール変数として参照すること。
 LONG_PATH_THRESHOLD: Final[int] = 248
 
-# 障害注入のフック(I-11)。段階名を渡して呼ぶ。既定は None。
+# 障害注入のフック(I-11)。段階名を渡して呼び出す。既定は None。
 _fault_hook: Callable[[str], None] | None = None
 
 # 現在の形式番号
@@ -34,7 +34,7 @@ FORMAT: Final[int] = 1
 
 
 def fault(stage: str) -> None:
-    # 障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼ぶ。
+    # 障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼び出す。
     hook = _fault_hook
     if hook is not None:
         hook(stage)
