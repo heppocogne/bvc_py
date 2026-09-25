@@ -115,7 +115,7 @@ def run(argv: list[str] | None = None) -> int:
 
     try:
         # argparse をテスト
-        parsed = parser.parse_args(argv or [])
+        parsed = parser.parse_args(argv)
 
         # グローバルオプション
         if parsed.help and not parsed.command:
@@ -156,7 +156,7 @@ def run(argv: list[str] | None = None) -> int:
         return EXIT_OK
 
     except BvcError as e:
-        parsed = parser.parse_args(argv or [])
+        parsed = parser.parse_args(argv)
         if parsed.json:
             error_data = {
                 "error": str(e),
