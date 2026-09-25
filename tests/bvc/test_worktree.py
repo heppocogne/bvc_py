@@ -1,4 +1,4 @@
-# worktree の単体テスト(M2-7〜M2-9)。観点: S-4, R-5, P-3, P-7, I-14。
+# worktree の単体テスト(M2-7〜M2-9, M3-2〜M3-5)。観点: S-4, R-2, R-3, R-5, P-1, P-3, P-7, I-14。
 
 import json
 import os
@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 from bvc import fsutil, worktree
-from bvc.errors import FileBusy, FileChanging, UnsafePath
-from bvc.model import Config
+from bvc.errors import BrokenVersion, BvcError, CorruptData, FileBusy, FileChanging, UnsafePath
+from bvc.model import Config, Head
 from bvc.store import ObjectStore
 from bvc.worktree import Worktree
 from tests import helpers
@@ -248,6 +248,199 @@ class _nullcontext:
 
     def __exit__(self, *exc):
         return False
+
+
+class RestoreTestCase(WorktreeTestCase):
+    # 版 A(a=a0, b=b0, d/c=c0)から版 B(a=a1, b=b1, e=e1、d/c は無し)への復元を試す。
+    def setUp(self):
+        super().setUp()
+        (self.bvc / "txn").mkdir()
+        self.write("a.bin", b"a1")
+        self.write("b.bin", b"b1")
+        self.write("e.bin", b"e1")
+        self.tree_b = self.wt.state({}, store_chunks=True).tree
+        for p in ("a.bin", "b.bin", "e.bin"):
+            (self.tmp / p).unlink()
+        self.write("a.bin", b"a0")
+        self.write("b.bin", b"b0")
+        self.write("d/c.bin", b"c0")
+        self.heads = []
+
+    def files(self):
+        return {p: (self.tmp / p).read_bytes() for p in helpers.tree_hashes(self.tmp)}
+
+    def on_committed(self, head):
+        self.heads.append(head)
+
+    def restore(self, **kw):
+        current = self.wt.state({}, store_chunks=True)
+        return self.wt.restore(self.tree_b, current, Head(1, 0), self.on_committed, **kw)
+
+    def journal(self):
+        return json.loads((self.bvc / "journal.json").read_text("utf-8"))
+
+    def leave_swapping(self, stage="replace:swap:2"):
+        # 置き換えの途中で失敗し、元に戻す処理もできなかった状態(強制終了の代わり)を作る
+        before = self.files()
+        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)), \
+                mock.patch.object(Worktree, "_rollback", side_effect=OSError("rollback")), \
+                self.assertRaises(FileBusy):
+            self.restore()
+        self.assertEqual(self.journal()["state"], "swapping")
+        self.assertNotEqual(self.files(), before)
+        return before
+
+
+class TestRestore(RestoreTestCase):
+    def test_restore_ops_and_index(self):
+        r = self.restore()
+        self.assertEqual((r.written, r.deleted), (["a.bin", "b.bin", "e.bin"], ["d/c.bin"]))
+        self.assertEqual(self.files(), {"a.bin": b"a1", "b.bin": b"b1", "e.bin": b"e1"})
+        self.assertEqual(self.heads, [Head(1, 0)])
+        self.assertFalse((self.bvc / "journal.json").exists())
+        self.assertEqual(list((self.bvc / "txn").iterdir()), [])
+        index = json.loads((self.bvc / "index.json").read_text("utf-8"))
+        self.assertEqual({p: e["manifest"] for p, e in index["entries"].items()}, self.tree_b)
+        self.assertFalse(self.wt.state(self.tree_b, store_chunks=False).dirty)
+
+    def test_keep_same_content(self):
+        self.write("a.bin", b"a1")
+        before = os.stat(self.tmp / "a.bin").st_mtime_ns
+        r = self.restore()
+        self.assertNotIn("a.bin", r.written)
+        self.assertEqual(os.stat(self.tmp / "a.bin").st_mtime_ns, before)
+
+    def test_no_ops(self):
+        for p in ("a.bin", "b.bin", "d/c.bin"):
+            (self.tmp / p).unlink()
+        self.write("a.bin", b"a1")
+        self.write("b.bin", b"b1")
+        self.write("e.bin", b"e1")
+        r = self.restore()
+        self.assertEqual((r.written, r.deleted), ([], []))
+        self.assertEqual(self.heads, [Head(1, 0)])
+
+    def test_refuses_when_journal_exists(self):
+        self.leave_swapping()
+        with self.assertRaises(BvcError):
+            self.restore()
+
+    def test_staging_corruption_is_broken_version(self):
+        sha = self.tree_b["b.bin"]
+        m = self.store.get_manifest(sha)
+        helpers.flip_byte(self.store.chunk_path(m.chunks[0].sha))
+        before = self.files()
+        with self.assertRaises(BrokenVersion):
+            self.restore()
+        self.assertEqual(self.files(), before)
+        self.assertFalse((self.bvc / "journal.json").exists())
+        self.assertEqual(self.heads, [])
+
+
+class TestRecover(RestoreTestCase):
+    def test_recover_swapping_rolls_back(self):
+        before = self.leave_swapping()
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            self.wt.recover(self.on_committed)
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.heads, [])
+        self.assertFalse((self.bvc / "journal.json").exists())
+        self.assertEqual(list((self.bvc / "txn").iterdir()), [])
+
+    def test_r3_recover_interrupted_is_idempotent(self):
+        before = self.leave_swapping("replace:swap:3")
+        for stage in ("replace:unswap:2", "replace:unstash:1", "txn_cleanup", "remove:journal.json"):
+            with self.subTest(stage=stage):
+                with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)), \
+                        self.assertRaises(OSError):
+                    self.wt.recover(self.on_committed)
+                self.assertTrue((self.bvc / "journal.json").exists())
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            self.wt.recover(self.on_committed)
+        self.assertEqual(self.files(), before)
+        self.wt.recover(self.on_committed)  # journal が無ければ何もしない
+        self.assertEqual(self.files(), before)
+
+    def test_recover_swapped_completes(self):
+        def fail(head):
+            raise OSError("HEAD を書けない")
+
+        current = self.wt.state({}, store_chunks=True)
+        with self.assertRaises(BvcError):
+            self.wt.restore(self.tree_b, current, Head(1, 0), fail)
+        self.assertEqual(self.journal()["state"], "swapped")
+        wt = self.make(["**"])  # 開き直した状態(stat の記録なし)
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            wt.recover(self.on_committed)
+        self.assertEqual(self.heads, [Head(1, 0)])
+        self.assertEqual(self.files(), {"a.bin": b"a1", "b.bin": b"b1", "e.bin": b"e1"})
+        self.assertFalse((self.bvc / "journal.json").exists())
+        self.assertFalse(wt.state(self.tree_b, store_chunks=False).dirty)
+
+    def test_recover_staging_discards(self):
+        before = self.files()
+        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("stage:2")), \
+                mock.patch.object(Worktree, "_discard_txn"), self.assertRaises(FileBusy):
+            self.restore()
+        self.assertEqual(self.journal()["state"], "staging")
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            self.wt.recover(self.on_committed)
+        self.assertEqual(self.files(), before)
+        self.assertEqual(list((self.bvc / "txn").iterdir()), [])
+
+    def test_p1_tampered_journal_changes_nothing(self):
+        self.leave_swapping()
+        good = self.journal()
+        bad_paths = ["../x.bin", "/abs.bin", "C:/x.bin", "//server/x.bin", ".bvc/config.json",
+                     "CON", "", "a\x01.bin", "a\\b.bin"]
+        cases = [("ops.path", p) for p in bad_paths] + [("ops.src", p) for p in bad_paths]
+        cases += [("target", p) for p in bad_paths]
+        cases += [("ops.n", -1), ("ops.n", "0"), ("head.at", 1.5), ("ops.sha", "../" + "a" * 61), ("state", "x")]
+        work = helpers.tree_hashes(self.tmp)
+        txn = helpers.tree_hashes(self.bvc / "txn", exclude=())
+        config = helpers.tree_hashes(self.bvc, exclude=("txn", "tmp"))
+        for where, value in cases:
+            with self.subTest(where=where, value=value):
+                j = json.loads(json.dumps(good))
+                if where == "ops.path":
+                    j["ops"][0]["path"] = value
+                elif where == "ops.src":
+                    j["ops"][0]["src"] = value
+                elif where == "target":
+                    j["target"][value] = "a" * 64
+                elif where == "ops.n":
+                    j["ops"][0]["n"] = value
+                elif where == "head.at":
+                    j["head"]["at"] = value
+                elif where == "ops.sha":
+                    j["ops"][1]["sha"] = value
+                else:
+                    j[where] = value
+                fsutil.atomic_write_json(self.bvc / "journal.json", j, self.bvc / "tmp")
+                config["journal.json"] = helpers.sha256_file(self.bvc / "journal.json")
+                with self.assertRaises(CorruptData):
+                    self.wt.recover(self.on_committed)
+                self.assertEqual(helpers.tree_hashes(self.tmp), work)
+                self.assertEqual(helpers.tree_hashes(self.bvc / "txn", exclude=()), txn)
+                self.assertEqual(helpers.tree_hashes(self.bvc, exclude=("txn", "tmp")), config)
+        self.assertEqual(self.heads, [])
+        fsutil.atomic_write_json(self.bvc / "journal.json", good, self.bvc / "tmp")
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            self.wt.recover(self.on_committed)  # 正しい記録に戻せば元に戻せる
+
+    def test_leftovers_without_journal(self):
+        (self.bvc / "txn" / "new").mkdir()
+        (self.bvc / "txn" / "new" / "0").write_bytes(b"garbage")
+        self.wt.recover(self.on_committed)
+        self.assertFalse((self.bvc / "txn" / "new").exists())
+        (self.bvc / "txn" / "old").mkdir()
+        (self.bvc / "txn" / "old" / "0").write_bytes(b"maybe precious")
+        with self.assertLogs("bvc.worktree", "WARNING"):
+            self.wt.recover(self.on_committed)
+        self.assertTrue((self.bvc / "txn" / "old" / "0").exists())
+        with self.assertRaises(BvcError):
+            self.restore()
+        self.assertTrue((self.bvc / "txn" / "old" / "0").exists())
 
 
 if __name__ == "__main__":

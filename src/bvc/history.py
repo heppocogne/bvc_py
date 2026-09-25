@@ -279,6 +279,10 @@ class History:
     def branch_name(self, branch: int) -> str | None:
         return self._branches.get(branch)
 
+    def branch_by_name(self, name: str) -> int | None:
+        # 名前の付いたブランチの番号(無ければ None)。
+        return next((b for b, n in self._branches.items() if n == name), None)
+
     def pinned_ids(self) -> set[int]:
         pinned = set()
         for pin in self._pins:
@@ -323,7 +327,7 @@ class History:
                 check_branch_name(atom)
             except RevisionError:
                 raise RevisionError(f"リビジョン式が不正です: {expr!r}") from None
-            bid = next((b for b, n in self._branches.items() if n == atom), None)
+            bid = self.branch_by_name(atom)
             if bid is None:
                 raise RevisionError(f"ブランチ '{atom}' はありません")
             cur = self.branch_tip(bid)

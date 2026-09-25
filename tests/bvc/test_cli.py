@@ -1,4 +1,4 @@
-# cli の単体テスト(M2-11, M2-12)。観点: F-1, F-7, F-12, P-5。
+# cli の単体テスト(M2-11, M2-12, M3-8)。観点: F-1, F-7, F-12, P-5。
 
 import io
 import json
@@ -6,7 +6,6 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from bvc import cli
-from bvc.model import Head
 from bvc.repo import Repo
 from tests import helpers
 
@@ -111,6 +110,71 @@ class TestCommands(CliTestCase):
         self.assertEqual((data["type"], data["details"]["missing"]), ("MissingFiles", ["a"]))
 
 
+class TestMoveCommands(CliTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write("a.bin", b"0")
+        self.bvc("init", "--track", "*.bin")
+        self.write("a.bin", b"1")
+        self.bvc("commit", "-m", "one")
+
+    def test_f1_undo_redo_goto(self):
+        self.write("b.bin", b"new")
+        code, out, err = self.bvc("undo", "-m", "やり直し")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("版 0 に移動しました", out)
+        self.assertIn("版 2 に自動コミットしました(auto: before undo)", out)
+        self.assertIn("restored: a.bin", out)
+        self.assertIn("deleted:  b.bin", out)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"0")
+        code, out, _ = self.bvc("redo")
+        self.assertEqual(code, 0)
+        self.assertIn("版 1 に移動しました", out)
+        code, out, _ = self.bvc("goto", "2")
+        self.assertEqual(code, 0)
+        self.assertEqual((self.tmp / "b.bin").read_bytes(), b"new")
+        with Repo.open(self.tmp) as repo:
+            ops = [o for o in repo.log()]
+        self.assertEqual(ops[0].commit.kind, "auto")
+
+    def test_f12_exit_codes(self):
+        code, _, err = self.bvc("redo")
+        self.assertEqual(code, 4)
+        self.assertIn("先端", err)
+        code, out, _ = self.bvc("goto", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("変更なし", out)
+        code, out, _ = self.bvc("--json", "goto", "@")
+        self.assertEqual(code, 0)
+        self.assertIs(json.loads(out)["changed"], False)
+        self.bvc("undo")
+        code, _, _ = self.bvc("undo")
+        self.assertEqual(code, 4)
+        code, out, _ = self.bvc("--json", "undo")
+        self.assertEqual((code, json.loads(out)["type"]), (4, "CannotMove"))
+        code, _, _ = self.bvc("goto", "99")
+        self.assertEqual(code, 1)
+        code, _, _ = self.bvc("goto")
+        self.assertEqual(code, 2)
+
+    def test_json_move_result(self):
+        code, out, _ = self.bvc("--json", "undo")
+        data = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertIs(data["changed"], True)
+        self.assertEqual((data["before"], data["after"]), ({"at": 1, "branch": 0}, {"at": 0, "branch": 0}))
+        self.assertEqual(data["restored"], ["a.bin"])
+
+    def test_f7_missing_on_move(self):
+        (self.tmp / "a.bin").unlink()
+        code, _, err = self.bvc("undo")
+        self.assertEqual(code, 3)
+        self.assertIn("missing: a.bin", err)
+        code, _, _ = self.bvc("undo", "--allow-missing")
+        self.assertEqual(code, 0)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"0")
+
+
 class TestLogTree(CliTestCase):
     def test_m2_done_branch_tree(self):
         # 完了条件: 分岐を含む履歴を作成し、log でツリーとして表示できる
@@ -120,8 +184,7 @@ class TestLogTree(CliTestCase):
         self.bvc("commit", "-m", "one")
         self.write("a", b"2")
         self.bvc("commit", "-m", "two")
-        with Repo.open(self.tmp) as repo:
-            repo._history.set_head(Head(1, 0))  # undo の代わり(M3)
+        self.bvc("undo")
         self.write("a", b"3")
         code, out, _ = self.bvc("commit", "-m", "three")
         self.assertIn("新しいブランチを作成", out)

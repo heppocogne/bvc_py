@@ -9,11 +9,11 @@ from typing import Any, Callable
 
 from .chunkers import make_chunker
 from .codecs import POLICIES
-from .errors import BvcError, MissingFiles, UsageError
+from .errors import BrokenVersion, BvcError, CannotMove, MissingFiles, RevisionError, UsageError
 from .fsutil import FileLock, atomic_write_json, compile_glob, load_json
 from .history import History
-from .model import CommitResult, Config, Head, LogEntry, WorkState
-from .store import ObjectStore
+from .model import CommitResult, Config, Head, LogEntry, MoveResult, WorkState
+from .store import ObjectStore, ProgressFn
 from .worktree import Worktree
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,24 @@ _SUBDIRS = ("commits", "manifests", "chunks", "notes", "quarantine", "txn", "tmp
 
 def _config_error(msg: str) -> UsageError:
     return UsageError(f"config.json: {msg}")
+
+
+def _missing_error(state: WorkState) -> MissingFiles:
+    return MissingFiles(
+        "追跡ファイルが見つかりません\n"
+        + "".join(f"  missing: {p}\n" for p in state.missing)
+        + "  削除として記録するには --allow-missing を指定してください",
+        missing=list(state.missing),
+    )
+
+
+def _no_skip_broken(skip_broken: bool) -> None:
+    if skip_broken:
+        raise UsageError("壊れた版を飛ばす移動(--skip-broken)は M4 で実装します")
+
+
+def _head_json(head: Head) -> dict:
+    return {"at": head.at, "branch": head.branch}
 
 
 def parse_config(data: dict) -> Config:
@@ -198,7 +216,7 @@ class Repo:
         try:
             config = parse_config(load_json(bvc_dir / "config.json", "config.json"))
             repo = cls(workdir, config, lock)
-            repo._worktree.recover()
+            repo._worktree.recover(repo._history.set_head)
             repo._history.load()
         except BaseException:
             if repo is not None:
@@ -244,12 +262,7 @@ class Repo:
         state = self._worktree.state(base_tree=base.tree, store_chunks=True)
 
         if state.missing and not allow_missing:
-            raise MissingFiles(
-                "追跡ファイルが見つかりません\n"
-                + "".join(f"  missing: {p}\n" for p in state.missing)
-                + "  削除として記録するには --allow-missing を指定してください",
-                missing=list(state.missing),
-            )
+            raise _missing_error(state)
 
         if not state.dirty:
             # 内容が同じなら記録(stat キャッシュ)だけ更新する(仕様書 2.5節)
@@ -270,11 +283,166 @@ class Repo:
         self._worktree.update_index(state.tree, state.fs_time_ns)
         self._history.log_op(
             {"op": kind, "args": {"message": message, "allow_missing": allow_missing},
-             "before": {"at": head.at, "branch": head.branch},
-             "after": {"at": after.at, "branch": after.branch},
+             "before": _head_json(head), "after": _head_json(after),
              "created": [commit.id], "result": "ok"}
         )
         return CommitResult(changed=True, commit=commit, state=state, new_branch=new_branch)
+
+    # --- 移動系(M3-6, M3-7、設計書 4.1節・4.5節) ---
+
+    def undo(
+        self,
+        reason: str = "",
+        allow_missing: bool = False,
+        skip_broken: bool = False,
+        progress: ProgressFn | None = None,
+    ) -> MoveResult:
+        # 親の版(effective_parent)へ移動する。現在のブランチ(redo の方向)は変えない。
+        _no_skip_broken(skip_broken)
+        head = self._history.head()
+        target = self._history.effective_parent(head.at)
+        if target is None:
+            raise CannotMove(f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at)
+        return self._move("undo", "", reason, target, None, allow_missing, progress)
+
+    def redo(
+        self,
+        reason: str = "",
+        allow_missing: bool = False,
+        skip_broken: bool = False,
+        progress: ProgressFn | None = None,
+    ) -> MoveResult:
+        # 現在のブランチの先端へ向かって1つ進む。経路上に無ければ、子が1つのときだけ進む。
+        _no_skip_broken(skip_broken)
+        h = self._history
+        head = h.head()
+        path = h.path_to_tip(head.branch)
+        if head.at in path:
+            idx = path.index(head.at)
+            if idx == 0:
+                raise CannotMove(f"版 {head.at} はブランチの先端なので、これ以上進めません", at=head.at)
+            return self._move("redo", "", reason, path[idx - 1], head.branch, allow_missing, progress)
+        kids = h.children(head.at)
+        if not kids:
+            raise CannotMove(f"版 {head.at} は先端(子の無い版)なので、これ以上進めません", at=head.at)
+        if len(kids) > 1:
+            raise CannotMove(
+                f"版 {head.at} には子が複数あるため、進む先を決められません。"
+                f"goto で版を指定してください(候補: {', '.join(map(str, kids))})",
+                at=head.at,
+                candidates=kids,
+            )
+        self._check_movable(kids[0])
+        return self._move("redo", "", reason, kids[0], h.get(kids[0]).branch, allow_missing, progress)
+
+    def goto(
+        self, rev: str, allow_missing: bool = False, progress: ProgressFn | None = None
+    ) -> MoveResult:
+        # 指定の版へ移動する。ブランチ名ならそのブランチを、版番号ならその版のブランチを現在のブランチにする。
+        # 現在位置への goto は何もしない(changed=False)。
+        h = self._history
+        head = h.head()
+        target = h.resolve(rev, head)
+        named = h.branch_by_name(rev)
+        if named is not None:
+            branch = named
+        elif target == head.at:
+            branch = head.branch
+        else:
+            self._check_movable(target)
+            branch = h.get(target).branch
+        if target == head.at:
+            if branch == head.branch:
+                return MoveResult(changed=False, before=head, after=head)
+            # 位置は同じで、ブランチ(redo の方向)だけを切り替える
+            after = Head(head.at, branch)
+            h.set_head(after)
+            h.log_op(
+                {"op": "goto", "args": {"rev": rev}, "reason": "", "before": _head_json(head),
+                 "after": _head_json(after), "created": [], "result": "ok"}
+            )
+            return MoveResult(changed=True, before=head, after=after)
+        return self._move("goto", rev, "", target, branch, allow_missing, progress, {"rev": rev})
+
+    def _check_movable(self, target: int) -> None:
+        # 移動先の版が読めて、tree に不正な値が無いか(マニフェスト・チャンクは restore の事前検査で確かめる)。
+        if not self._history.exists(target):
+            raise RevisionError(f"版 {target} は存在しません")
+        if self._history.is_broken(target):
+            raise BrokenVersion(f"版 {target} は壊れているため移動できません", commit=target)
+
+    def _move(
+        self,
+        op: str,
+        arg: str,
+        reason: str,
+        target_id: int,
+        branch: int | None,
+        allow_missing: bool,
+        progress: ProgressFn | None,
+        args: dict | None = None,
+    ) -> MoveResult:
+        # 移動系の共通手順(設計書 4.1節)。移動先は呼び出し側が自動コミットの前に決めておく。
+        # branch が None なら、移動後もそのときの HEAD.branch(自動コミットがあればそのブランチ)を保つ。
+        h, wt = self._history, self._worktree
+        head = h.head()
+        self._check_movable(target_id)
+        target = h.get(target_id)
+        base = h.get(head.at)
+
+        # 事前検査(衝突・パス・保存データ)。ここまでは何も変えない
+        files = wt.check_target(target.tree)
+        paths = set(base.tree) | set(target.tree) | set(files)
+        # 上書き・削除し得るパスは、stat キャッシュを使わずにハッシュする(仕様書 2.8節)
+        touched = {p for p in paths if base.tree.get(p) != target.tree.get(p) or p not in target.tree}
+        state = wt.state(base_tree=base.tree, store_chunks=True, no_cache=touched)
+        if state.missing and not allow_missing:
+            raise _missing_error(state)
+
+        # 自動コミット。HEAD も auto に進めてから復元する(I-18)
+        auto = None
+        current = head
+        if state.dirty:
+            message = f"auto: before {op}" + (f" {arg}" if arg else "")
+            auto = h.new_commit(
+                parent=head.at,
+                tree=state.tree,
+                kind="auto",
+                message=message,
+                renames=tuple(state.renamed),
+                stats={"new_bytes": state.new_bytes, "total_bytes": state.total_bytes},
+            )
+            current = Head(auto.id, auto.branch)
+            h.set_head(current)
+            wt.update_index(state.tree, state.fs_time_ns)
+
+        after = Head(target_id, current.branch if branch is None else branch)
+        entry = {
+            "op": op,
+            "args": {**(args or {}), "allow_missing": allow_missing},
+            "reason": reason,
+            "before": _head_json(head),
+            "created": [auto.id] if auto is not None else [],
+        }
+        try:
+            res = wt.restore(target.tree, state, after, h.set_head, progress)
+        except BaseException as e:
+            if auto is not None:
+                # 自動コミットで履歴は変わったので、中止したことも記録する
+                try:
+                    h.log_op({**entry, "after": _head_json(current), "result": "error", "error": str(e)})
+                except Exception:
+                    logger.warning("操作ログに記録できませんでした", exc_info=True)
+            raise
+        h.log_op({**entry, "after": _head_json(after), "result": "ok"})
+        return MoveResult(
+            changed=True,
+            before=head,
+            after=after,
+            auto_commit=auto,
+            restored=res.written,
+            deleted=res.deleted,
+        )
 
     def resolve(self, rev: str) -> int:
         # リビジョン式を版番号にする。

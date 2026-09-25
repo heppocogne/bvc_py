@@ -15,7 +15,7 @@ from typing import Any, Final
 
 from . import __version__
 from .errors import BvcError, SafetyAbort
-from .model import CommitResult, LogEntry, WorkState
+from .model import CommitResult, LogEntry, MoveResult, WorkState
 from .repo import Repo
 
 # 成功
@@ -128,6 +128,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-n", dest="limit", type=int, metavar="<件数>", help="表示件数")
     p.add_argument("--discarded", action="store_true", help="削除済みの版も表示する")
 
+    allow_missing_help = "見つからない追跡ファイルを、自動コミットで削除として記録する"
+    for name, help_text in (("undo", "1つ前の版に戻る"), ("redo", "戻したのを取り消す(先端へ進む)")):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("-m", "--message", dest="reason", default="", metavar="<理由>", help="理由(操作ログに記録する)")
+        p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+
+    p = sub.add_parser("goto", help="指定の版へ移動する")
+    p.add_argument("rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)")
+    p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+
     return parser
 
 
@@ -165,6 +175,8 @@ def run(argv: list[str] | None = None) -> int:
             return _cmd_commit(args, start)
         if args.command == "log":
             return _cmd_log(args, start)
+        if args.command in ("undo", "redo", "goto"):
+            return _cmd_move(args, start)
         logger.error("不明なコマンドです: %s", args.command)
         return EXIT_USAGE
     except BvcError as e:
@@ -268,9 +280,38 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
     return EXIT_OK
 
 
+def _cmd_move(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        if args.command == "undo":
+            result = repo.undo(reason=args.reason, allow_missing=args.allow_missing)
+        elif args.command == "redo":
+            result = repo.redo(reason=args.reason, allow_missing=args.allow_missing)
+        else:
+            result = repo.goto(args.rev, allow_missing=args.allow_missing)
+    if args.json:
+        _print_json(result)
+        return EXIT_OK
+    for line in format_move(result):
+        logger.info("%s", line)
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------------------
 # 表示の整形
 # ---------------------------------------------------------------------------
+
+
+def format_move(r: MoveResult) -> list[str]:
+    if not r.changed:
+        return [f"変更なし(現在位置は版 {r.after.at} です)"]
+    if r.after.at == r.before.at:
+        return [f"版 {r.after.at} のまま、現在のブランチを切り替えました"]
+    lines = [f"版 {r.after.at} に移動しました"]
+    if r.auto_commit is not None:
+        lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
+    lines += [f"  restored: {p}" for p in r.restored]
+    lines += [f"  deleted:  {p}" for p in r.deleted]
+    return lines
 
 
 def format_size(n: int) -> str:

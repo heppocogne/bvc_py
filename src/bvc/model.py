@@ -156,6 +156,14 @@ class MoveResult:
 
 
 @dataclass(slots=True)
+class RestoreResult:
+    # 作業ファイルの復元(worktree.restore)の結果。設計書 3.6節・4.6節。
+
+    written: list[str] = field(default_factory=list)  # 書き出したパス(移動先の内容に置き換えた)
+    deleted: list[str] = field(default_factory=list)  # 削除したパス(移動先に無い追跡ファイル)
+
+
+@dataclass(slots=True)
 class Config:
     # 設定(config.json の内容)。設計書 1.1節・3.1節。
 
