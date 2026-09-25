@@ -27,7 +27,7 @@ classifiers = [
 dependencies = []
 
 # [project.urls]
-# Homepage = "https://github.com/heppcogne/bvc-py"
+# Homepage = "https://github.com/heppocogne/bvc-py"
 
 [project.scripts]
 bvc = "bvc.main:main"
