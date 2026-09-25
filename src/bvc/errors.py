@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar, Final
 
 
 class BvcError(Exception):
     # bvc のエラーの基底。終了コード 1。
 
-    exit_code = 1
+    exit_code: ClassVar[Final[int]] = 1
 
     def __init__(self, message: str = "", **details: Any) -> None:
         super().__init__(message)
@@ -20,12 +20,12 @@ class BvcError(Exception):
 
 class UsageError(BvcError):
     # 引数の誤り。
-    exit_code = 2
+    exit_code: ClassVar[Final[int]] = 2
 
 
 class SafetyAbort(BvcError):
     # 安全のため中止した。
-    exit_code = 3
+    exit_code: ClassVar[Final[int]] = 3
 
 
 class MissingFiles(SafetyAbort):

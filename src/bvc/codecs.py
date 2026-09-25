@@ -5,18 +5,18 @@ from __future__ import annotations
 
 import zlib
 from abc import ABC, abstractmethod
-from typing import ClassVar, Iterable, Iterator
+from typing import ClassVar, Final, Iterable, Iterator
 
 from bvc.errors import CorruptData, UnsupportedFormat
 
 # 逐次復号で一度に取り出す最大のバイト数
-DECODE_BLOCK = 16 << 20
+DECODE_BLOCK: Final[int] = 16 << 20
 # auto で試しに圧縮する先頭部分の大きさと、raw を選ぶ圧縮率のしきい値
-AUTO_SAMPLE = 256 << 10
-AUTO_RATIO = 0.95
-ZLIB_LEVEL = 1
+AUTO_SAMPLE: Final[int] = 256 << 10
+AUTO_RATIO: Final[float] = 0.95
+ZLIB_LEVEL: Final[int] = 1
 
-POLICIES = ("auto", "none", "zlib")
+POLICIES: Final[tuple[str, str, str]] = ("auto", "none", "zlib")
 
 
 class Encoder(ABC):

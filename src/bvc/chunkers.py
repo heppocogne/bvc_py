@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, BinaryIO, ClassVar, Iterator
+from typing import Any, BinaryIO, ClassVar, Final, Iterator
 
 # 読み込み単位(split が返す断片の最大サイズ)
-READ_SIZE = 16 << 20
+READ_SIZE: Final[int] = 16 << 20
 # fixed のチャンクサイズの上限(誤設定でメモリを使い果たさないための目安)
-MAX_FIXED_SIZE = 1 << 30
+MAX_FIXED_SIZE: Final[int] = 1 << 30
 
 
 class Chunker(ABC):

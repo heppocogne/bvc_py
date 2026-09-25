@@ -13,7 +13,7 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Iterable, Iterator
+from typing import Any, BinaryIO, Callable, Final, Iterable, Iterator
 
 from bvc import fsutil
 from bvc.chunkers import make_chunker
@@ -22,16 +22,16 @@ from bvc.errors import CorruptData, UnsafePath
 from bvc.model import ChunkRef, Manifest, ProgressEvent, PutStats, StoreVerifyResult
 
 # これより大きなチャンクは、メモリに載せずに逐次保存する(whole では常に逐次)
-STREAM_THRESHOLD = 64 << 20
+STREAM_THRESHOLD: Final[int] = 64 << 20
 # put_file で処理中のチャンクの合計の上限(件数の上限 threads×2 と併用)
-MAX_INFLIGHT_BYTES = 256 << 20
+MAX_INFLIGHT_BYTES: Final[int] = 256 << 20
 # チャンクファイルを読む単位(小さなファイルでも read(n) は n バイトを確保するため、控えめにする)
-CHUNK_READ_SIZE = 1 << 20
+CHUNK_READ_SIZE: Final[int] = 1 << 20
 # 長さが分からないときの復号の上限(逐次処理なのでメモリは使わない)
-_NO_LIMIT = 1 << 62
+_NO_LIMIT: Final[int] = 1 << 62
 
-CHECKS = ("exists", "full")
-HEALTH_KINDS = ("bad_chunks", "bad_manifests", "bad_commits")
+CHECKS: Final[tuple[str, str]] = ("exists", "full")
+HEALTH_KINDS: Final[tuple[str, str, str]] = ("bad_chunks", "bad_manifests", "bad_commits")
 
 ProgressFn = Callable[[ProgressEvent], None]
 
@@ -123,7 +123,7 @@ class Health:
 # マニフェストの JSON
 # ---------------------------------------------------------------------------
 
-_MANIFEST_KEYS = frozenset(["format", "size", "sha256", "chunker", "chunks"])
+_MANIFEST_KEYS: Final[frozenset[str]] = frozenset(["format", "size", "sha256", "chunker", "chunks"])
 
 
 def manifest_to_json(m: Manifest) -> dict:

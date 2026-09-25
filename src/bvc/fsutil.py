@@ -15,22 +15,22 @@ import stat
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Final, Iterable
 
 from bvc.errors import CorruptData, Locked, UnsafePath, UnsupportedFormat
 
-IS_WINDOWS = os.name == "nt"
+IS_WINDOWS: Final[bool] = os.name == "nt"
 
 # この長さ以上の絶対パスを \\?\ 付きにする(フォルダ作成の上限が 248 のため)。
 # テストでは 0 に差し替えて、常に \\?\ 付きの経路を通す(I-16)。
 # 関数の中では、呼び出しのたびにモジュール変数として参照すること。
-LONG_PATH_THRESHOLD = 248
+LONG_PATH_THRESHOLD: Final[int] = 248
 
 # 障害注入のフック(I-11)。段階名を渡して呼ぶ。既定は None。
 _fault_hook: Callable[[str], None] | None = None
 
 # 現在の形式番号
-FORMAT = 1
+FORMAT: Final[int] = 1
 
 
 def fault(stage: str) -> None:
@@ -49,8 +49,8 @@ def now_iso() -> str:
 # 長いパス(I-16)
 # ---------------------------------------------------------------------------
 
-_PREFIX = "\\\\?\\"
-_UNC_PREFIX = "\\\\?\\UNC\\"
+_PREFIX: Final[str] = "\\\\?\\"
+_UNC_PREFIX: Final[str] = "\\\\?\\UNC\\"
 
 
 def os_path(base: str | os.PathLike[str], rel: str = "") -> str:
@@ -106,11 +106,11 @@ def is_link_or_reparse(st: os.stat_result) -> bool:
 # 記録された値の検査(仕様書 2.9節、設計書 4.10節、I-6)
 # ---------------------------------------------------------------------------
 
-_SHA_RE = re.compile(r"[0-9a-f]{64}")
-_ID_STR_RE = re.compile(r"0|[1-9][0-9]{0,15}")
-MAX_ID = 10**15
-_INVALID_CHARS = frozenset('<>:"|?*\\')
-_RESERVED = frozenset(
+_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+_ID_STR_RE: Final[re.Pattern[str]] = re.compile(r"0|[1-9][0-9]{0,15}")
+MAX_ID: Final[int] = 10**15
+_INVALID_CHARS: Final[frozenset[str]] = frozenset('<>:"|?*\\')
+_RESERVED: Final[frozenset[str]] = frozenset(
     ["CON", "PRN", "AUX", "NUL"]
     + [f"COM{c}" for c in "0123456789¹²³"]
     + [f"LPT{c}" for c in "0123456789¹²³"]

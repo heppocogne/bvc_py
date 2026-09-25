@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Final
 
 from bvc import __version__
 
 # 終了コード(仕様書 2.2節)。M1 で errors.py の exit_code と対応させる。
-EXIT_OK = 0
-EXIT_USAGE = 2
+EXIT_OK: Final[int] = 0
+EXIT_USAGE: Final[int] = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
