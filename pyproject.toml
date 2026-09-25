@@ -26,6 +26,12 @@ classifiers = [
 # 標準ライブラリのみの予定
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0", # カバレッジ測定が必要な場合など
+]
+
 # [project.urls]
 # Homepage = "https://github.com/heppocogne/bvc-py"
 
