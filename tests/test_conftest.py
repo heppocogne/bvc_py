@@ -86,7 +86,7 @@ def test_no_tests_is_success(sandbox: pytest.Pytester):
 
 
 def test_force_long_path_requires_fsutil(sandbox: pytest.Pytester):
-    # --force-long-path で fsutil の閾値を差し替える。fsutil が無ければ黙って通常の道筋で流さずに失敗する。
+    # --force-long-path で fsutil の閾値を差し替える。fsutil が無ければ、黙って通常の経路で実行せずに失敗させる。
     sandbox.makepyfile(**{"tests/test_lp.py": '''
 def test_threshold():
     from bvc import fsutil

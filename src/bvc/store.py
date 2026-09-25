@@ -42,7 +42,7 @@ def _sha256(data: bytes) -> str:
 
 def _check_check(check: str) -> None:
     if check not in CHECKS:
-        raise ValueError(f"不明な検査の方法: {check!r}")
+        raise ValueError(f"不明な検査方法: {check!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def manifest_from_json(obj: Any) -> Manifest:
         return CorruptData(f"マニフェストの形式が不正です: {why}")
 
     if set(obj) != _MANIFEST_KEYS:
-        raise bad("項目が違う")
+        raise bad("項目に過不足がある")
     size, whole_sha, chunker, chunks = obj["size"], obj["sha256"], obj["chunker"], obj["chunks"]
     if not _is_int(size) or size < 0:
         raise bad("size")
@@ -338,7 +338,7 @@ class ObjectStore:
         return self._put_chunk(data, check)[0]
 
     def _put_chunk(self, data: bytes, check: str) -> tuple[ChunkRef, int]:
-        """(ChunkRef, 新しく書いたファイルのバイト数。既存なら 0)。"""
+        """(ChunkRef, 新しく書いたファイルのバイト数) を返す。既存のチャンクなら後者は 0。"""
         _check_check(check)
         ref = ChunkRef(_sha256(data), len(data))
         with self._stripe(ref.sha):
@@ -359,7 +359,7 @@ class ObjectStore:
     def _put_chunk_stream(
         self, pieces: Iterable[bytes], compression: str | None, check: str
     ) -> tuple[ChunkRef, int]:
-        # tmp に書きながら SHA-256 と圧縮を逐次適用し、最後に has_chunk を確認して、
+        # tmp に書きながら SHA-256 の計算と圧縮を進め、最後に has_chunk を確認する。
         # 無ければハッシュ名へ置き換え、あれば tmp を捨てる
         _check_check(check)
         it = iter(pieces)
@@ -422,7 +422,7 @@ class ObjectStore:
         self.health.clear("bad_chunks", sha)
 
     def open_chunk(self, sha: str, length: int) -> Iterator[bytes]:
-        """チャンクを逐次に復号して断片を返す。
+        """チャンクを逐次復号して断片を返す。
 
         最後にハッシュと長さを照合し、異常なら隔離して CorruptData を送出する。
         照合の前に断片を返すので、呼び出し側は最後まで読み切ってから結果を確定させること。
@@ -587,7 +587,7 @@ class ObjectStore:
     ) -> tuple[str, PutStats]:
         """ファイルを分割して保存し、(マニフェストの sha, 統計) を返す。
 
-        読み込み・分割・全体の SHA-256 はメインスレッドで行い、チャンクの hash・圧縮・書き込みは
+        読み込み・分割・全体の SHA-256 はメインスレッドで行い、チャンクのハッシュ計算・圧縮・書き込みは
         ワーカーで行う。処理中のチャンクは threads×2 件(かつ MAX_INFLIGHT_BYTES)までに制限する。
         大きなチャンク(STREAM_THRESHOLD 超、whole)はメインスレッドで逐次保存する。
         path は進捗表示用。
@@ -695,7 +695,7 @@ class ObjectStore:
         progress: ProgressFn | None = None,
         path: str | None = None,
     ) -> None:
-        """マニフェストの内容を out に逐次書き出し、全体の SHA-256 を照合する(メモリ一定)。
+        """マニフェストの内容を out に逐次書き出し、全体の SHA-256 を照合する(メモリ使用量は一定)。
 
         異常なら CorruptData(書き出した内容は使わないこと)。
         """

@@ -20,7 +20,7 @@ _F = TypeVar("_F", bound=Callable)
 
 
 # ---------------------------------------------------------------------------
-# 長いパスの道筋(I-16、実装計画書 6.5節)
+# 長いパスの経路(I-16、実装計画書 6.5節)
 # ---------------------------------------------------------------------------
 
 def _apply_long_path_setting() -> None:
@@ -31,8 +31,8 @@ def _apply_long_path_setting() -> None:
     """
     if not os.environ.get(ENV_LONG_PATH):
         return
-    # fsutil は M1 で追加する。無い状態で指定された場合は、黙って通常の道筋で
-    # 流さないよう ImportError のまま失敗させる。
+    # fsutil は M1 で追加する。fsutil が無いのに指定された場合は、黙って通常の経路で
+    # 実行しないよう ImportError のまま失敗させる。
     from bvc import fsutil
 
     fsutil.LONG_PATH_THRESHOLD = 0

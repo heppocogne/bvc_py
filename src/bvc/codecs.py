@@ -11,7 +11,7 @@ from bvc.errors import CorruptData, UnsupportedFormat
 
 # 逐次復号で一度に取り出す最大のバイト数
 DECODE_BLOCK = 16 << 20
-# auto で試し圧縮する先頭の大きさと、raw にする縮小率のしきい値
+# auto で試しに圧縮する先頭部分の大きさと、raw を選ぶ圧縮率のしきい値
 AUTO_SAMPLE = 256 << 10
 AUTO_RATIO = 0.95
 ZLIB_LEVEL = 1
@@ -36,11 +36,11 @@ class Codec(ABC):
 
     @abstractmethod
     def encoder(self) -> Encoder:
-        """逐次に圧縮する(大きなチャンク用)。"""
+        """逐次圧縮用の Encoder を返す(大きなチャンク用)。"""
 
     @abstractmethod
     def iter_decode(self, pieces: Iterable[bytes], limit: int) -> Iterator[bytes]:
-        """ペイロードの断片を逐次に復号する。
+        """ペイロードの断片を逐次復号する。
 
         復号後の合計が limit を超えそうになった時点で CorruptData を送出する
         (改ざんされたデータでメモリを使い果たさないため。C-9)。
@@ -73,7 +73,7 @@ class RawCodec(Codec):
         for piece in pieces:
             total += len(piece)
             if total > limit:
-                raise CorruptData("チャンクの復号後のサイズが記録より大きい")
+                raise CorruptData("チャンクを復号したサイズが記録を超えています")
             if piece:
                 yield piece
 
@@ -106,7 +106,7 @@ class ZlibCodec(Codec):
             for piece in pieces:
                 if d.eof:
                     if piece:
-                        raise CorruptData("圧縮データの後ろに余分なデータがある")
+                        raise CorruptData("圧縮データの後ろに余分なデータがあります")
                     continue
                 buf = piece
                 while buf and not d.eof:
@@ -114,12 +114,12 @@ class ZlibCodec(Codec):
                     out = d.decompress(buf, min(DECODE_BLOCK, limit - total + 1))
                     total += len(out)
                     if total > limit:
-                        raise CorruptData("チャンクの復号後のサイズが記録より大きい")
+                        raise CorruptData("チャンクを復号したサイズが記録を超えています")
                     if out:
                         yield out
                     buf = d.unconsumed_tail
                 if d.eof and (buf or d.unused_data):
-                    raise CorruptData("圧縮データの後ろに余分なデータがある")
+                    raise CorruptData("圧縮データの後ろに余分なデータがあります")
             # 入力を使い切っても、取り出し上限のために出力が残っていることがある
             while not d.eof:
                 out = d.decompress(b"", min(DECODE_BLOCK, limit - total + 1))
@@ -127,12 +127,12 @@ class ZlibCodec(Codec):
                     break
                 total += len(out)
                 if total > limit:
-                    raise CorruptData("チャンクの復号後のサイズが記録より大きい")
+                    raise CorruptData("チャンクを復号したサイズが記録を超えています")
                 yield out
         except zlib.error as e:
-            raise CorruptData(f"圧縮データを復号できない: {e}") from e
+            raise CorruptData(f"圧縮データを復号できません: {e}") from e
         if not d.eof:
-            raise CorruptData("圧縮データが途中で切れている")
+            raise CorruptData("圧縮データが途中で途切れています")
 
 
 _CODECS: tuple[Codec, ...] = (RawCodec(), ZlibCodec())
@@ -154,7 +154,7 @@ def choose_codec(policy: str, data: bytes) -> Codec:
     """圧縮の方針から Codec を選ぶ。
 
     "none" → raw、"zlib" → zlib、
-    "auto" → 先頭 256KiB を zlib L1 で試し、縮小率が 0.95 を超えれば raw(圧縮が効かない)。
+    "auto" → 先頭 256KiB を zlib L1 で試し、圧縮率が 0.95 を超えれば raw(圧縮が効かない)。
     """
     if policy == "none":
         return CODECS_BY_NAME["raw"]

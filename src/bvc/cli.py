@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-C",
         dest="workdir",
         metavar="<パス>",
-        help="作業フォルダを指定する(省略時はカレントから上位へ .bvc を探す)",
+        help="作業フォルダを指定する(省略時はカレントフォルダから上へ向かって .bvc を探す)",
     )
     parser.add_argument(
         "--json",

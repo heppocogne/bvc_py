@@ -6,7 +6,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, BinaryIO, ClassVar, Iterator
 
-# 読み込み単位(split が返す断片の最大の大きさ)
+# 読み込み単位(split が返す断片の最大サイズ)
 READ_SIZE = 16 << 20
 # fixed のチャンクサイズの上限(誤設定でメモリを使い果たさないための目安)
 MAX_FIXED_SIZE = 1 << 30

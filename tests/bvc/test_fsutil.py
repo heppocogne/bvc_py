@@ -147,7 +147,7 @@ class TestLock(helpers.TempDirTestCase):
         fsutil.FileLock(path).acquire()  # 解放後は取れる
 
     def test_stale_lock_is_not_removed(self):
-        # stale 判定はしない。壊れたロックファイルでも止まり、消さない
+        # 古いロックかどうかは判定しない。壊れたロックファイルでも止まり、消さない
         path = self.tmp / "lock"
         path.write_bytes(b"\x00garbage")
         with self.assertRaises(Locked) as cm:

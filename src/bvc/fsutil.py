@@ -22,7 +22,7 @@ from bvc.errors import CorruptData, Locked, UnsafePath, UnsupportedFormat
 IS_WINDOWS = os.name == "nt"
 
 # この長さ以上の絶対パスを \\?\ 付きにする(フォルダ作成の上限が 248 のため)。
-# テストでは 0 に差し替えて、常に \\?\ 付きの道筋を通す(I-16)。
+# テストでは 0 に差し替えて、常に \\?\ 付きの経路を通す(I-16)。
 # 関数の中では、呼び出しのたびにモジュール変数として参照すること。
 LONG_PATH_THRESHOLD = 248
 
@@ -34,7 +34,7 @@ FORMAT = 1
 
 
 def fault(stage: str) -> None:
-    """障害注入の地点。テストが _fault_hook を差し込んだときだけ呼ぶ。"""
+    """障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼ぶ。"""
     hook = _fault_hook
     if hook is not None:
         hook(stage)
@@ -179,7 +179,7 @@ def resolve_in_workdir(workdir: str | os.PathLike[str], rel: str) -> Path:
 
     rel を check_relpath で検査し、途中のフォルダと対象自身がシンボリックリンク・
     ジャンクションでないこと、途中がフォルダであること、結果が workdir の内側に
-    あることを確認する。存在しない途中のフォルダはそれ以降の確認を省く(後で作る)。
+    あることを確認する。途中のフォルダが存在しなければ、そこから先の確認は省く(後で作るため)。
     """
     rel = check_relpath(rel)
     workdir = Path(workdir)
@@ -228,7 +228,7 @@ def makedirs(path: str | os.PathLike[str]) -> None:
 
 
 def new_tmp_path(tmpdir: str | os.PathLike[str]) -> Path:
-    """tmpdir の中の一意な一時ファイル名(tmpdir は作っておく)。"""
+    """tmpdir の中に一意な一時ファイル名を用意する(tmpdir が無ければ作る)。"""
     makedirs(tmpdir)
     return Path(tmpdir) / f"{uuid.uuid4().hex}.tmp"
 
@@ -383,7 +383,7 @@ def read_jsonl(
 class FileLock:
     """O_CREAT|O_EXCL で作るロックファイル。with 文で使える。
 
-    既にあれば Locked を送出する(内容を details["info"] に入れる)。stale 判定はしない。
+    既にあれば Locked を送出する(内容を details["info"] に入れる)。古いロックかどうかは判定しない。
     """
 
     def __init__(self, path: str | os.PathLike[str]) -> None:

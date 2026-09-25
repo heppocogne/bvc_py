@@ -31,7 +31,7 @@ class SafetyAbort(BvcError):
 
 
 class MissingFiles(SafetyAbort):
-    """追跡ファイルが欠落している(--allow-missing が無い)。"""
+    """追跡ファイルが欠落している(--allow-missing の指定なし)。"""
 
 
 class FileBusy(SafetyAbort):
