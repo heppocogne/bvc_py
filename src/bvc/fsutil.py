@@ -302,14 +302,10 @@ def check_format(obj: Any, what: str, known: Iterable[int] = (FORMAT,)) -> dict:
 def load_json(path: str | os.PathLike[str], what: str) -> dict:
     """JSON ファイルを読み、format を検査して返す。
 
-    ファイルが無ければ FileNotFoundError。読めない・解析できない・形式不正なら CorruptData。
+    ファイルが無ければ FileNotFoundError。解析できない・形式不正なら CorruptData。
+    読み込み自体の OSError(使用中など)は破損の証拠ではないので、そのまま送出する(D-15)。
     """
-    try:
-        data = read_bytes(path)
-    except FileNotFoundError:
-        raise
-    except OSError as e:
-        raise CorruptData(f"{what}: 読み込めません: {e}") from e
+    data = read_bytes(path)
     try:
         obj = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as e:

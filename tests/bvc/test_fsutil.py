@@ -57,6 +57,20 @@ class TestAtomicWrite(helpers.TempDirTestCase):
         with self.assertRaises(UnsupportedFormat):
             fsutil.load_json(self.path, "x")
 
+    def test_load_json_oserror_is_not_corruption(self):
+        # D-15: 読めない(使用中など)ことを破損と誤認して、自動復旧に進ませない
+        self.path.parent.mkdir(parents=True)
+        self.path.write_bytes(b'{"format":1}')
+        with mock.patch.object(fsutil, "read_bytes", side_effect=PermissionError("busy")):
+            with self.assertRaises(PermissionError):
+                fsutil.load_json(self.path, "x")
+
+    def test_load_json_is_a_directory(self):
+        # 中身の読めないもの(フォルダ)も、CorruptData ではなく OSError
+        self.path.mkdir(parents=True)
+        with self.assertRaises(OSError):
+            fsutil.load_json(self.path, "x")
+
 
 class TestJsonl(helpers.TempDirTestCase):
     def setUp(self):
