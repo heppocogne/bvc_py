@@ -9,7 +9,7 @@ from tests import helpers
 
 
 def chunks_of(chunker, data):
-    """split の結果をチャンク単位にまとめる。断片の大きさも確認する。"""
+    # split の結果をチャンク単位にまとめる。断片の大きさも確認する。
     result, cur = [], []
     for piece, end in chunker.split(io.BytesIO(data)):
         assert 0 < len(piece) <= chunkers.READ_SIZE, len(piece)

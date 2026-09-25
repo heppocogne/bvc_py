@@ -291,7 +291,7 @@ class TestManifestCorruption(StoreTestCase):
         self.path = self.store.manifest_path(self.msha)
 
     def write_named(self, obj):
-        """内容のハッシュに名前を合わせたマニフェストを置く(改ざんの再現)。"""
+        # 内容のハッシュに名前を合わせたマニフェストを置く(改ざんの再現)。
         data = fsutil.canonical_json(obj)
         sha = hashlib.sha256(data).hexdigest()
         p = self.store.manifest_path(sha)

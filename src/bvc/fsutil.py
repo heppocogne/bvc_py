@@ -263,7 +263,7 @@ def atomic_write(
 def atomic_write_json(
     path: str | os.PathLike[str], obj: Any, tmpdir: str | os.PathLike[str]
 ) -> None:
-    """正規化 JSON + 末尾の改行で原子的に書く。"""
+    # 正規化 JSON + 末尾の改行で原子的に書く。
     atomic_write(path, canonical_json(obj) + b"\n", tmpdir)
 
 
@@ -359,10 +359,9 @@ def read_jsonl(
 # ---------------------------------------------------------------------------
 
 class FileLock:
-    """O_CREAT|O_EXCL で作るロックファイル。with 文で使える。
-
-    既にあれば Locked を送出する(内容を details["info"] に入れる)。古いロックかどうかは判定しない。
-    """
+    # O_CREAT|O_EXCL で作るロックファイル。with 文で使える。
+    #
+    # 既にあれば Locked を送出する(内容を details["info"] に入れる)。古いロックかどうかは判定しない。
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path)

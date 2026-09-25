@@ -24,11 +24,10 @@ _F = TypeVar("_F", bound=Callable)
 # ---------------------------------------------------------------------------
 
 def _apply_long_path_setting() -> None:
-    """環境変数 BVC_TEST_LONG_PATH があれば、fsutil.os_path が全パスを \\\\?\\ 付きにするよう閾値を 0 にする。
-
-    本体は環境変数を読まない。fsutil の関数は LONG_PATH_THRESHOLD をモジュール変数として
-    呼び出しのたびに参照すること(from import で値を写し取らない)。
-    """
+    # 環境変数 BVC_TEST_LONG_PATH があれば、fsutil.os_path が全パスを \\?\ 付きにするよう閾値を 0 にする。
+    #
+    # 本体は環境変数を読まない。fsutil の関数は LONG_PATH_THRESHOLD をモジュール変数として
+    # 呼び出しのたびに参照すること(from import で値を写し取らない)。
     if not os.environ.get(ENV_LONG_PATH):
         return
     # fsutil は M1 で追加する。fsutil が無いのに指定された場合は、黙って通常の経路で
@@ -50,11 +49,10 @@ def run_slow_enabled() -> bool:
 
 
 def slow(func: _F) -> _F:
-    """時間のかかるテストに付ける。環境変数 BVC_RUN_SLOW が無ければ skip する。
-
-    判定は import 時ではなく実行時に行う。pytest でノード ID を個別に指定したときは、
-    conftest がその項目の実行中だけ環境変数を設定する。
-    """
+    # 時間のかかるテストに付ける。環境変数 BVC_RUN_SLOW が無ければ skip する。
+    #
+    # 判定は import 時ではなく実行時に行う。pytest でノード ID を個別に指定したときは、
+    # conftest がその項目の実行中だけ環境変数を設定する。
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -73,7 +71,7 @@ def slow(func: _F) -> _F:
 # ---------------------------------------------------------------------------
 
 class TempDirTestCase(unittest.TestCase):
-    """テストごとに一時フォルダ self.tmp を作り、終了時に消す。"""
+    # テストごとに一時フォルダ self.tmp を作り、終了時に消す。
 
     tmp: Path
 
@@ -89,7 +87,7 @@ def make_temp_dir(prefix: str = "bvc-test-") -> Path:
 
 
 def remove_tree(path: Path) -> None:
-    """読み取り専用属性のファイルがあっても消す(P-8 のテストの後始末など)。"""
+    # 読み取り専用属性のファイルがあっても消す(P-8 のテストの後始末など)。
 
     def onerror(func, p, exc_info):
         os.chmod(p, 0o700)
@@ -105,12 +103,12 @@ def remove_tree(path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def random_bytes(size: int, seed: int = 0) -> bytes:
-    """seed から決まる疑似乱数のバイト列(圧縮の効かない内容)。"""
+    # seed から決まる疑似乱数のバイト列(圧縮の効かない内容)。
     return random.Random(seed).randbytes(size)
 
 
 def write_random_file(path: Path, size: int, seed: int = 0) -> str:
-    """疑似乱数の内容でファイルを作り、SHA-256 を返す。親フォルダも作る。"""
+    # 疑似乱数の内容でファイルを作り、SHA-256 を返す。親フォルダも作る。
     path.parent.mkdir(parents=True, exist_ok=True)
     h = hashlib.sha256()
     rng = random.Random(seed)
@@ -143,7 +141,7 @@ def sha256_file(path: Path) -> str:
 
 
 def iter_files(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> Iterator[Path]:
-    """root 以下のファイルを列挙する。exclude の名前のフォルダ(直下)は除く。"""
+    # root 以下のファイルを列挙する。exclude の名前のフォルダ(直下)は除く。
     for dirpath, dirnames, filenames in os.walk(root):
         if Path(dirpath) == root:
             dirnames[:] = [d for d in dirnames if d not in exclude]
@@ -152,7 +150,7 @@ def iter_files(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> Iterator[Pat
 
 
 def tree_hashes(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> dict[str, str]:
-    """root 以下の全ファイルの {相対パス('/' 区切り): SHA-256}。"""
+    # root 以下の全ファイルの {相対パス('/' 区切り): SHA-256}。
     return {
         p.relative_to(root).as_posix(): sha256_file(p) for p in iter_files(root, exclude)
     }
@@ -163,11 +161,10 @@ def tree_hashes(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> dict[str, s
 # ---------------------------------------------------------------------------
 
 class FaultAt:
-    """障害注入のフック(実装計画書 6.2節)。fsutil._fault_hook に差し込む。
-
-    段階名が stage に一致したら、count 回目に exc を送出する。呼ばれた段階名を calls に記録する。
-    stage に None を渡すと、記録だけする。
-    """
+    # 障害注入のフック(実装計画書 6.2節)。fsutil._fault_hook に差し込む。
+    #
+    # 段階名が stage に一致したら、count 回目に exc を送出する。呼ばれた段階名を calls に記録する。
+    # stage に None を渡すと、記録だけする。
 
     def __init__(self, stage: str | None = None, exc: BaseException | None = None, count: int = 1):
         self.stage = stage
@@ -185,7 +182,7 @@ class FaultAt:
 
 
 def flip_byte(path: Path, offset: int = -1) -> None:
-    """offset の1バイトを反転する(負数は末尾から)。"""
+    # offset の1バイトを反転する(負数は末尾から)。
     data = bytearray(path.read_bytes())
     data[offset] ^= 0xFF
     path.write_bytes(bytes(data))
@@ -197,19 +194,19 @@ def truncate_file(path: Path, size: int) -> None:
 
 
 def set_first_byte(path: Path, value: int) -> None:
-    """先頭1バイト(チャンクの codec ID)を書き換える。"""
+    # 先頭1バイト(チャンクの codec ID)を書き換える。
     data = bytearray(path.read_bytes())
     data[0] = value
     path.write_bytes(bytes(data))
 
 
 def break_json(path: Path) -> None:
-    """JSON として読めない内容にする。"""
+    # JSON として読めない内容にする。
     path.write_bytes(path.read_bytes()[:-3] + b"\x00{")
 
 
 def try_symlink(target: Path, link: Path, target_is_directory: bool = False) -> bool:
-    """シンボリックリンクを作る。権限などで作れなければ False。"""
+    # シンボリックリンクを作る。権限などで作れなければ False。
     try:
         os.symlink(target, link, target_is_directory=target_is_directory)
     except (OSError, NotImplementedError):
@@ -218,7 +215,7 @@ def try_symlink(target: Path, link: Path, target_is_directory: bool = False) -> 
 
 
 def try_junction(target: Path, link: Path) -> bool:
-    """Windows のジャンクションを作る(Windows 以外・作れなければ False)。"""
+    # Windows のジャンクションを作る(Windows 以外・作れなければ False)。
     if os.name != "nt":
         return False
     try:

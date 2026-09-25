@@ -43,7 +43,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def _explicit_node_ids(config: pytest.Config) -> list[tuple[Path, str]]:
-    """コマンドラインで '::' 付きで指定された項目を (ファイルの絶対パス, '::' 以降) にする。"""
+    # コマンドラインで '::' 付きで指定された項目を (ファイルの絶対パス, '::' 以降) にする。
     result = []
     invocation_dir = Path(config.invocation_params.dir)
     for arg in config.args:
