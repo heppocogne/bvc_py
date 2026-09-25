@@ -1,0 +1,9 @@
+[project]
+name = "bvc_py"
+version = "0.1.0"
+authors = [
+  { name="heppocogne", email="83043568+heppocogne@users.noreply.github.com" },
+]
+description = "バイナリファイル向けバージョン管理システムのPython版(試作)"
+readme = "README.md"
+requires-python = ">=3.10"
