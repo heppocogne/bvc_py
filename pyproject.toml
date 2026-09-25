@@ -1,9 +1,33 @@
 [project]
 name = "bvc_py"
 version = "0.1.0"
-authors = [
-  { name="heppocogne", email="83043568+heppocogne@users.noreply.github.com" },
-]
 description = "バイナリファイル向けバージョン管理システムのPython版(試作)"
 readme = "README.md"
 requires-python = ">=3.10"
+# license = { text = "MIT" }
+authors = [
+  { name = "heppocogne", email = "83043568+heppocogne@users.noreply.github.com" },
+]
+keywords = ["vcs", "binary", "version-control"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  # "License :: OSI Approved :: MIT License",
+  # "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  # "Topic :: System :: Archiving",
+]
+# 標準ライブラリのみの予定
+dependencies = []
+
+# [project.urls]
+# Homepage = "https://github.com/heppcogne/bvc-py"
+
+[project.scripts]
+bvc = "bvc.main:main"
