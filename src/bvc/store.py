@@ -329,14 +329,16 @@ class ObjectStore:
         # 隔離済み・欠損・破損のチャンクは、ここで作り直される。
         return self._put_chunk(data, check)[0]
 
-    def _put_chunk(self, data: bytes, check: str) -> tuple[ChunkRef, int]:
+    def _put_chunk(
+        self, data: bytes, check: str, compression: str | None = None
+    ) -> tuple[ChunkRef, int]:
         # (ChunkRef, 新しく書いたファイルのバイト数) を返す。既存のチャンクなら後者は 0。
         _check_check(check)
         ref = ChunkRef(_sha256(data), len(data))
         with self._stripe(ref.sha):
             if self.has_chunk(ref.sha, check, ref.length):
                 return ref, 0
-            codec = choose_codec(self.compression, data)
+            codec = choose_codec(compression or self.compression, data)
             payload = codec.encode(data)
             tmp = self._write_tmp((bytes([codec.id]), payload))
             self._install_chunk(tmp, ref.sha)
@@ -574,8 +576,10 @@ class ObjectStore:
         check: str = "exists",
         progress: ProgressFn | None = None,
         path: str | None = None,
+        compression: str | None = None,
     ) -> tuple[str, PutStats]:
         # ファイルを分割して保存し、(マニフェストの sha, 統計) を返す。
+        # compression を指定すると、このファイルだけ既定の圧縮方式を上書きする(config の rules)。
         # 読み込み・分割・全体の SHA-256 はメインスレッドで行い、チャンクのハッシュ計算・圧縮・書き込みは
         # ワーカーで行う。処理中のチャンクは threads×2 件(かつ MAX_INFLIGHT_BYTES)までに制限する。
         # 大きなチャンク(STREAM_THRESHOLD 超、whole)はメインスレッドで逐次保存する。
@@ -607,7 +611,7 @@ class ObjectStore:
                     buf, buflen = [], 0
                     n = len(data)
                     inflight.acquire(n)
-                    fut = pool.submit(self._put_chunk, data, check)
+                    fut = pool.submit(self._put_chunk, data, check, compression)
                     fut.add_done_callback(lambda _f, n=n: inflight.release(n))
                     slots.append(fut)
                     del data
@@ -627,7 +631,7 @@ class ObjectStore:
                             if end2:
                                 return
 
-                    slots.append(self._put_chunk_stream(rest(), None, check))
+                    slots.append(self._put_chunk_stream(rest(), compression, check))
                     del pending
                     report()
         except BaseException:

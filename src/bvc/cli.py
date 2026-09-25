@@ -1,318 +1,412 @@
 # 引数解析・表示整形・終了コード・--json。設計書 1.1節・3.7節。
+# 情報・警告・エラーのメッセージは logging で出す(情報は stdout、警告以上は stderr)。
+# コマンドの結果そのもの(log の表示、--json、--version)は stdout へ print する。
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
 from . import __version__
-from .errors import BvcError
-from .model import CommitResult
+from .errors import BvcError, SafetyAbort
+from .model import CommitResult, LogEntry, WorkState
 from .repo import Repo
 
+# 成功
 EXIT_OK: Final[int] = 0
+# エラー(データ不整合、見つからない等)
+EXIT_ERROR: Final[int] = 1
+# 引数の誤り
 EXIT_USAGE: Final[int] = 2
+# 安全のため中止(ファイルの欠落、使用中・書き込み中、ロック中)
+EXIT_ABORT: Final[int] = 3
+
+
+# ---------------------------------------------------------------------------
+# ログの出力先
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+
+class _Formatter(logging.Formatter):
+    # 警告以上には接頭辞を付ける。record.prefix があればそれを使う(例: "中止")。
+    _PREFIX = {
+        logging.WARNING: "警告",
+        logging.ERROR: "エラー",
+        logging.CRITICAL: "エラー",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = super().format(record)
+        prefix = getattr(record, "prefix", None) or self._PREFIX.get(record.levelno)
+        return f"{prefix}: {msg}" if prefix else msg
+
+
+def setup_logging(quiet: bool = False) -> None:
+    # bvc パッケージのロガーの出力先を設定する。呼ぶたびに作り直す(その時点の sys.stdout/stderr を使う)。
+    root = logging.getLogger("bvc")
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(logging.INFO)
+    root.propagate = False
+    fmt = _Formatter("%(message)s")
+    if not quiet:
+        out = logging.StreamHandler(sys.stdout)
+        out.setLevel(logging.INFO)
+        out.addFilter(lambda r: r.levelno < logging.WARNING)
+        out.setFormatter(fmt)
+        root.addHandler(out)
+    err = logging.StreamHandler(sys.stderr)
+    err.setLevel(logging.WARNING)
+    err.setFormatter(fmt)
+    root.addHandler(err)
+
+
+# ---------------------------------------------------------------------------
+# 引数
+# ---------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # argparse を構成(M2-11)。
-
+    # argparse を構成する(M2-11)。
     parser = argparse.ArgumentParser(
         prog="bvc",
         description="大容量バイナリファイル向けのローカル専用バージョン管理ツール",
         add_help=False,
     )
-
-    # グローバルオプション
     parser.add_argument(
         "-C",
         dest="workdir",
         metavar="<パス>",
         type=Path,
-        default=Path.cwd(),
-        help="作業フォルダを指定する(省略時はカレントフォルダ)",
+        default=None,
+        help="作業フォルダを指定する(省略時はカレントから上位へ .bvc を探す)",
     )
+    parser.add_argument("--json", action="store_true", help="結果を JSON で出力する")
     parser.add_argument(
-        "--json",
-        action="store_true",
-        help="結果を JSON で出力する",
+        "-q", dest="quiet", action="store_true", help="通常の出力を抑制する"
     )
-    parser.add_argument(
-        "-q",
-        dest="quiet",
-        action="store_true",
-        help="出力を抑制する",
-    )
-    parser.add_argument(
-        "--help",
-        action="store_true",
-        help="ヘルプを表示",
-    )
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        help="バージョンを表示",
-    )
+    parser.add_argument("--help", action="store_true", help="ヘルプを表示")
+    parser.add_argument("--version", action="store_true", help="バージョンを表示")
 
-    # サブコマンド
-    subparsers = parser.add_subparsers(dest="command", metavar="<コマンド>", title="コマンド")
+    sub = parser.add_subparsers(dest="command", metavar="<コマンド>", title="コマンド")
 
-    # init コマンド
-    init_parser = subparsers.add_parser("init", help="リポジトリを初期化")
-    init_parser.add_argument("path", nargs="?", default=".", help="作業フォルダ")
-    init_parser.add_argument(
+    p = sub.add_parser("init", help="リポジトリを作成する")
+    p.add_argument(
+        "path", nargs="?", default=None, help="作業フォルダ(省略時は -C またはカレント)"
+    )
+    p.add_argument(
         "--track",
-        nargs="+",
-        default=["*"],
-        help="追跡パターン(既定: *)",
+        action="append",
+        required=True,
+        metavar="<パターン>",
+        help="追跡パターン(複数指定可)",
     )
-    init_parser.add_argument(
+    p.add_argument(
         "--ignore",
-        nargs="*",
+        action="append",
         default=[],
-        help="除外パターン",
+        metavar="<パターン>",
+        help="除外パターン(複数指定可)",
     )
 
-    # commit コマンド
-    commit_parser = subparsers.add_parser("commit", help="コミット")
-    commit_parser.add_argument(
-        "-m",
-        "--message",
-        default="",
-        help="コミットメッセージ",
-    )
-    commit_parser.add_argument(
+    p = sub.add_parser("commit", help="追跡ファイルの現状を版として記録する")
+    p.add_argument("-m", "--message", default="", help="メッセージ")
+    p.add_argument(
         "--allow-missing",
         action="store_true",
-        help="欠落ファイルを許可",
+        help="見つからない追跡ファイルを削除として記録する",
     )
 
-    # log コマンド
-    log_parser = subparsers.add_parser("log", help="履歴を表示")
-    log_parser.add_argument(
-        "-n",
-        "--limit",
-        type=int,
-        help="表示件数",
-    )
-    log_parser.add_argument(
-        "--all",
-        action="store_true",
-        help="削除済みも含める",
-    )
+    p = sub.add_parser("log", help="版のツリーを表示する")
+    p.add_argument("-n", dest="limit", type=int, metavar="<件数>", help="表示件数")
+    p.add_argument("--discarded", action="store_true", help="削除済みの版も表示する")
 
     return parser
 
 
+# ---------------------------------------------------------------------------
+# 入口
+# ---------------------------------------------------------------------------
+
+
 def run(argv: list[str] | None = None) -> int:
-    # エントリポイント(M2-11)。
-
+    # 引数を解析してコマンドを実行し、終了コードを返す(M2-11、仕様書 2.2節)。
     parser = build_parser()
-
     try:
-        # argparse をテスト
-        parsed = parser.parse_args(argv)
-
-        # グローバルオプション
-        if parsed.help and not parsed.command:
-            parser.print_help()
-            return EXIT_OK
-
-        if parsed.version:
-            print(f"bvc {__version__}")
-            return EXIT_OK
-
-        # コマンド実行
-        if parsed.command == "init":
-            result = _cmd_init(parsed)
-        elif parsed.command == "commit":
-            result = _cmd_commit(parsed)
-        elif parsed.command == "log":
-            result = _cmd_log(parsed)
-        elif not parsed.command:
-            parser.print_usage(sys.stderr)
-            print("bvc: エラー: コマンドを指定してください", file=sys.stderr)
-            return EXIT_USAGE
-        else:
-            print(f"不明なコマンド: {parsed.command}", file=sys.stderr)
-            return EXIT_USAGE
-
-        # 結果を出力
-        if parsed.json:
-            _output_json(result)
-        else:
-            _output_text(result)
-
-        # 終了コード
-        if isinstance(result, CommitResult) and not result.changed:
-            return EXIT_OK
-        elif isinstance(result, dict) and "error" in result:
-            return result.get("exit_code", 1)
-
-        return EXIT_OK
-
-    except BvcError as e:
-        parsed = parser.parse_args(argv)
-        if parsed.json:
-            error_data = {
-                "error": str(e),
-                "type": e.__class__.__name__,
-                "exit_code": e.exit_code,
-            }
-            print(json.dumps(error_data, ensure_ascii=False), file=sys.stderr)
-        else:
-            print(f"エラー: {e}", file=sys.stderr)
-
-        return getattr(e, "exit_code", 1)
-
-    except KeyboardInterrupt:
-        print("キャンセルされました", file=sys.stderr)
-        return 3
-
+        args = parser.parse_args(argv)
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else EXIT_USAGE
 
+    setup_logging(quiet=args.quiet or args.json)
+
+    if args.help:
+        parser.print_help()
+        return EXIT_OK
+    if args.version:
+        print(f"bvc {__version__}")
+        return EXIT_OK
+    if not args.command:
+        parser.print_usage(sys.stderr)
+        logger.error("コマンドを指定してください")
+        return EXIT_USAGE
+
+    start = args.workdir if args.workdir is not None else Path.cwd()
+    try:
+        if args.command == "init":
+            return _cmd_init(args, start)
+        if args.command == "commit":
+            return _cmd_commit(args, start)
+        if args.command == "log":
+            return _cmd_log(args, start)
+        logger.error("不明なコマンドです: %s", args.command)
+        return EXIT_USAGE
+    except BvcError as e:
+        if args.json:
+            _print_json(
+                {
+                    "changed": False,
+                    "error": str(e),
+                    "type": type(e).__name__,
+                    "exit_code": e.exit_code,
+                    "details": e.details,
+                }
+            )
+        prefix = "中止" if isinstance(e, SafetyAbort) else None
+        logger.error("%s", e, extra={"prefix": prefix})
+        return e.exit_code
+    except KeyboardInterrupt:
+        logger.error("中断しました")
+        return EXIT_ABORT
     except Exception as e:
-        print(f"予期しないエラー: {e}", file=sys.stderr)
-        return 1
+        logger.error("予期しないエラー: %s", e, exc_info=True)
+        return EXIT_ERROR
 
 
-def _cmd_init(args) -> dict:
-    # init コマンド(M2-10)。
+# ---------------------------------------------------------------------------
+# コマンド
+# ---------------------------------------------------------------------------
 
-    workdir = Path(args.path).resolve()
 
-    repo = Repo.init(
-        workdir=workdir,
-        track=args.track,
-        ignore=args.ignore,
+def _cmd_init(args: argparse.Namespace, start: Path) -> int:
+    workdir = start / args.path if args.path else start
+    with Repo.init(workdir, track=args.track, ignore=args.ignore) as repo:
+        entry = repo.log(limit=1)[0]
+    files = len(entry.commit.tree)
+    if args.json:
+        _print_json(
+            {
+                "changed": True,
+                "path": str(repo.workdir),
+                "commit": entry.id,
+                "files": files,
+            }
+        )
+    else:
+        logger.info(
+            "リポジトリを作成しました: %s(版 %d、追跡ファイル %d 件)",
+            repo.workdir,
+            entry.id,
+            files,
+        )
+    return EXIT_OK
+
+
+def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        result = repo.commit(message=args.message, allow_missing=args.allow_missing)
+    if args.json:
+        _print_json(result)
+        return EXIT_OK
+    if not result.changed:
+        logger.info("変更なし")
+        return EXIT_OK
+    s = result.state
+    logger.info(
+        "版 %d を作成しました%s(新規データ %s / %s)",
+        result.commit.id,
+        "(新しいブランチを作成)" if result.new_branch else "",
+        format_size(s.new_bytes),
+        format_size(s.total_bytes),
     )
-    repo.close()
-
-    return {
-        "type": "init",
-        "path": str(workdir),
-        "success": True,
-    }
+    for line in _change_lines(s, deleted_label="deleted"):
+        logger.info("  %s", line)
+    return EXIT_OK
 
 
-def _cmd_commit(args) -> CommitResult:
-    # commit コマンド(M2-10)。
-
-    repo = Repo.open(args.workdir)
-    result = repo.commit(
-        message=args.message,
-        allow_missing=args.allow_missing,
-    )
-    repo.close()
-
-    return result
-
-
-def _cmd_log(args) -> dict:
-    # log コマンド(M2-10)。
-
-    repo = Repo.open(args.workdir)
-    entries = repo.log(
-        include_discarded=args.all,
-        limit=args.limit,
-    )
-    repo.close()
-
-    # ツリー表示(M2-12)
-    output = _format_log_tree(entries)
-
-    return {
-        "type": "log",
-        "entries": [_entry_to_dict(e) for e in entries],
-        "text": output,
-    }
+def _cmd_log(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        entries = repo.log(include_discarded=args.discarded, limit=args.limit)
+        try:
+            state: WorkState | None = repo.work_state()
+        except BvcError as e:
+            logger.warning("未コミットの変更を確認できません: %s", e)
+            state = None
+    if args.json:
+        _print_json(
+            {
+                "changed": False,
+                "uncommitted": None
+                if state is None
+                else {
+                    "modified": state.modified,
+                    "added": state.added,
+                    "renamed": [list(r) for r in state.renamed],
+                    "missing": state.missing,
+                },
+                "entries": [_entry_to_dict(e) for e in entries],
+            }
+        )
+    else:
+        print(format_log(entries, state))
+    return EXIT_OK
 
 
-def _format_log_tree(entries) -> str:
-    # log のツリー表示(M2-12)。仕様書 3.3節。
+# ---------------------------------------------------------------------------
+# 表示の整形
+# ---------------------------------------------------------------------------
 
-    lines = []
 
-    for entry in entries:
-        commit = entry.commit
+def format_size(n: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TiB"
 
-        # マーク
-        if entry.is_current:
-            mark = "●"
-        elif entry.discarded:
-            mark = "✗"
+
+def _change_lines(s: WorkState, deleted_label: str = "missing") -> list[str]:
+    lines = [f"modified: {p}" for p in s.modified]
+    lines += [f"added:    {p}" for p in s.added]
+    lines += [f"renamed:  {a} → {b}" for a, b, _ in s.renamed]
+    lines += [f"{deleted_label}:  {p}" for p in s.missing]
+    return lines
+
+
+def _short_time(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).strftime("%m-%d %H:%M")
+    except ValueError:
+        return iso
+
+
+def _entry_text(e: LogEntry) -> str:
+    if e.commit is None:
+        return f"{e.id}  (読み込み不可)"
+    c = e.commit
+    parts = [str(e.id)]
+    if e.branch_label:
+        parts.append(f"[{e.branch_label}]")
+    parts.append(_short_time(c.time))
+    parts.append(c.message or f"({c.kind})")
+    if e.discarded:
+        parts.append("(削除済み)")
+    if e.broken:
+        parts.append("(壊れた版)")
+    return "  ".join(parts)
+
+
+def _lane_cells(lanes: list[int | None]) -> list[str]:
+    return ["│" if lane is not None else " " for lane in lanes]
+
+
+def _join(cells: list[str], fill_from: int = -1, fill_to: int = -1) -> str:
+    # セルを空白でつなぐ。fill_from < i <= fill_to の区切りは '─' にする(合流の横線)。
+    out = cells[0] if cells else ""
+    for i in range(1, len(cells)):
+        out += ("─" if fill_from < i <= fill_to else " ") + cells[i]
+    return out.rstrip()
+
+
+def _graph_lines(entries: list[LogEntry]) -> list[str]:
+    # 版を新しい順に並べ、枝の列を割り当ててツリーを描く(M2-12、仕様書 3.3節)。
+    # lanes[i] は列 i が次に待っている版の番号(None は空き)。
+    lanes: list[int | None] = []
+    lines: list[str] = []
+    for e in entries:
+        cols = [i for i, lane in enumerate(lanes) if lane == e.id]
+        if cols:
+            col = cols[0]
+        elif None in lanes:
+            col = lanes.index(None)
         else:
-            mark = "○"
+            col = len(lanes)
+            lanes.append(None)
+        for i in cols[1:]:
+            lanes[i] = None
+        lanes[col] = e.id
 
-        # ブランチ名
-        branch_part = f" [{entry.branch_label}]" if entry.branch_label else ""
+        cells = _lane_cells(lanes)
+        cells[col] = "@" if e.is_current else ("✗" if e.broken else "○")
+        lines.append(f"{_join(cells)}  {_entry_text(e)}")
 
-        # メッセージ
-        message = commit.message if commit else "(読込不可)"
+        parent = e.effective_parent
+        lanes[col] = parent
+        for n in e.notes:
+            lines.append(
+                f"{_join(_lane_cells(lanes)).ljust(len(lanes) * 2 - 1)}     note: {n.text}"
+            )
 
-        # 行を組み立て
-        line = f"{mark} {commit.id if commit else '?'}:{branch_part} {message}"
-        lines.append(line)
+        # 同じ親を待つ列があれば、左側の列へ合流させる
+        if parent is not None:
+            same = sorted(i for i, lane in enumerate(lanes) if lane == parent)
+            target = same[0]
+            for src in same[1:]:
+                cells = _lane_cells(lanes)
+                cells[target] = "├"
+                cells[src] = "╯"
+                for i in range(target + 1, src):
+                    cells[i] = "┼" if lanes[i] is not None else "─"
+                lines.append(_join(cells, target, src))
+                lanes[src] = None
+        while lanes and lanes[-1] is None:
+            lanes.pop()
+    return lines
 
+
+def format_log(entries: list[LogEntry], state: WorkState | None) -> str:
+    lines = []
+    if state is not None and state.dirty:
+        changes = [f"{p} (modified)" for p in state.modified]
+        changes += [f"{p} (added)" for p in state.added]
+        changes += [f"{a} → {b} (renamed)" for a, b, _ in state.renamed]
+        changes += [f"{p} (missing)" for p in state.missing]
+        lines.append("未コミットの変更: " + ", ".join(changes))
+    lines += _graph_lines(entries)
     return "\n".join(lines)
 
 
-def _output_json(result: Any) -> None:
-    # JSON で出力。
-
-    if is_dataclass(result):
-        data = asdict(result)
-    elif isinstance(result, dict):
-        data = result
-    else:
-        data = {"result": result}
-
-    print(json.dumps(data, ensure_ascii=False, indent=2))
-
-
-def _output_text(result: Any) -> None:
-    # テキストで出力。
-
-    if isinstance(result, CommitResult):
-        if result.changed:
-            print(f"コミット {result.commit.id} を作成しました")
-        else:
-            print("変更がありません")
-
-    elif isinstance(result, dict):
-        if "text" in result:
-            print(result["text"])
-        else:
-            for key, value in result.items():
-                if key != "text" and key != "entries":
-                    print(f"{key}: {value}")
-
-
-def _entry_to_dict(entry) -> dict:
-    # LogEntry を辞書に変換(JSON 出力用)。
-
-    commit_data = None
-    if entry.commit:
-        commit_data = {
-            "id": entry.commit.id,
-            "parent": entry.commit.parent,
-            "branch": entry.commit.branch,
-            "time": entry.commit.time,
-            "kind": entry.commit.kind,
-            "message": entry.commit.message,
-        }
-
+def _entry_to_dict(e: LogEntry) -> dict:
+    c = e.commit
     return {
-        "commit": commit_data,
-        "effective_parent": entry.effective_parent,
-        "branch_label": entry.branch_label,
-        "is_tip": entry.is_tip,
-        "is_current": entry.is_current,
-        "discarded": entry.discarded,
-        "pinned": entry.pinned,
+        "id": e.id,
+        "commit": None
+        if c is None
+        else {
+            "id": c.id,
+            "parent": c.parent,
+            "branch": c.branch,
+            "time": c.time,
+            "kind": c.kind,
+            "message": c.message,
+        },
+        "effective_parent": e.effective_parent,
+        "branch_label": e.branch_label,
+        "is_tip": e.is_tip,
+        "is_current": e.is_current,
+        "broken": e.broken,
+        "discarded": e.discarded,
+        "pinned": e.pinned,
+        "notes": [{"time": n.time, "text": n.text} for n in e.notes],
     }
+
+
+def _print_json(result: Any) -> None:
+    data = asdict(result) if is_dataclass(result) else result
+    print(json.dumps(data, ensure_ascii=False, indent=2))

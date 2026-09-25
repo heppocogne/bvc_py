@@ -3,8 +3,6 @@
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-import tomllib
-
 
 def _get_version() -> str:
     try:
@@ -12,16 +10,15 @@ def _get_version() -> str:
     except PackageNotFoundError:
         pass
 
+    # 未インストールでソースから実行している場合(開発時)。.pyz はビルド時にこのファイルを置き換える
     try:
-        pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
-        if pyproject_path.exists():
-            with open(pyproject_path, "rb") as f:
-                data = tomllib.load(f)
-                return data.get("project", {}).get("version", "unknown")
-    except Exception:
-        pass
+        import tomllib  # 3.11 以降。3.10 では unknown になる
 
-    return "unknown"
+        pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except (ImportError, OSError, ValueError, KeyError):
+        return "unknown"
 
 
 __version__ = _get_version()

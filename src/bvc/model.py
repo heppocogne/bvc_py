@@ -107,6 +107,9 @@ class WorkState:
     renamed: list[tuple[str, str, float]] = field(default_factory=list)  # (消えたパス, 新しいパス, 類似度)
     missing: list[str] = field(default_factory=list)    # 追跡ファイルが無い
     hints: dict[str, list[str]] = field(default_factory=dict)  # missing → パターン外で同一内容のパス
+    total_bytes: int = 0   # 追跡ファイルの合計サイズ
+    new_bytes: int = 0     # 今回新しく保存したチャンクの圧縮前のバイト数
+    fs_time_ns: int = 0    # 走査を始めた時点のファイルシステム上の時刻(index に記録する。I-14)
 
     @property
     def dirty(self) -> bool:
@@ -118,10 +121,12 @@ class WorkState:
 class LogEntry:
     # log コマンドの出力行。設計書 3.1節。
 
-    commit: Commit                      # 版ファイルの内容(読めなければ None)
+    id: int                             # 版番号
+    commit: Commit | None               # 版ファイルの内容(読めなければ None)
     effective_parent: int | None        # つなぎ直し後の親(None なら根)
-    branch_label: str | None = None     # ブランチ名(名前付きなら)
-    is_tip: bool = False                # HEAD.branch の先端か
+    branch_label: str | None = None     # ブランチ名(名前付きブランチの先端なら)
+    is_tip: bool = False                # 自分のブランチの先端か
+    broken: bool = False                # 壊れた版か(読み込み不可・不正な tree)
     is_current: bool = False            # 現在位置(@)か
     discarded: bool = False             # 削除済みか
     pinned: bool = False                # git に pin されているか
