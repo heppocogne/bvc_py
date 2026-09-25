@@ -37,3 +37,16 @@ dev = [
 
 [project.scripts]
 bvc = "bvc.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# pytester は tests/test_conftest.py(conftest 自体のテスト)で使う
+addopts = "-p pytester"
+# slow は既定で skip する(tests/conftest.py、実装計画書 6.5節)。
+# "-m 'not slow'" を addopts に入れると GUI で個別に選んでも外れるため使わない。
+markers = [
+    "slow: 時間がかかる(大容量・規模・実際の待機を含む)。--run-slow かノード ID 指定のときだけ実行する",
+    "git: git コマンドが必要",
+    "kill: 子プロセスを kill する",
+    "windows: Windows 固有",
+]
