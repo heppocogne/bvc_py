@@ -62,3 +62,102 @@ class StoreVerifyResult:
     @property
     def ok(self) -> bool:
         return not (self.bad_chunks or self.bad_manifests or self.broken_manifests)
+
+
+@dataclass(frozen=True, slots=True)
+class Head:
+    # 現在位置(HEAD)とブランチ。設計書 4.5節。
+
+    at: int      # 現在の版番号
+    branch: int  # 現在のブランチ番号
+
+
+@dataclass(frozen=True, slots=True)
+class Commit:
+    # 版(不変レコード)。設計書 2.4節。
+
+    id: int                           # 版番号(0 からの単調増加)
+    parent: int | None                # 作成時点の親の版番号
+    ancestors: tuple[int, ...]        # 親から根までの版番号(祖先トレース用)
+    branch: int                       # ブランチ番号
+    time: str                         # ISO 8601 形式(タイムゾーン付き)
+    kind: str                         # "init", "commit", "auto", "import" のいずれか
+    message: str                      # コミットメッセージ
+    tree: dict[str, str]              # パス → マニフェスト sha256
+    renames: tuple[tuple[str, str, float], ...]  # (消えたパス, 新しいパス, 類似度)
+    stats: dict                       # "new_bytes", "total_bytes" など
+
+
+@dataclass(frozen=True, slots=True)
+class Note:
+    # コメント(追記のみ)。設計書 2.6節。
+
+    commit_id: int  # コメントを付ける版番号
+    time: str       # ISO 8601 形式
+    text: str
+
+
+@dataclass(slots=True)
+class WorkState:
+    # 作業フォルダの状態(変更検出の結果)。設計書 3.1節。
+
+    tree: dict[str, str]                              # 現状のパス → マニフェスト sha256
+    modified: list[str] = field(default_factory=list)  # 内容が変わったパス
+    added: list[str] = field(default_factory=list)      # 新しいパス
+    renamed: list[tuple[str, str, float]] = field(default_factory=list)  # (消えたパス, 新しいパス, 類似度)
+    missing: list[str] = field(default_factory=list)    # 追跡ファイルが無い
+    hints: dict[str, list[str]] = field(default_factory=dict)  # missing → パターン外で同一内容のパス
+
+    @property
+    def dirty(self) -> bool:
+        # 作業フォルダに未コミットの変更があるか。
+        return bool(self.modified or self.added or self.renamed or self.missing)
+
+
+@dataclass(slots=True)
+class LogEntry:
+    # log コマンドの出力行。設計書 3.1節。
+
+    commit: Commit                      # 版ファイルの内容(読めなければ None)
+    effective_parent: int | None        # つなぎ直し後の親(None なら根)
+    branch_label: str | None = None     # ブランチ名(名前付きなら)
+    is_tip: bool = False                # HEAD.branch の先端か
+    is_current: bool = False            # 現在位置(@)か
+    discarded: bool = False             # 削除済みか
+    pinned: bool = False                # git に pin されているか
+    notes: list[Note] = field(default_factory=list)  # このコミットに付いているコメント
+
+
+@dataclass(slots=True)
+class CommitResult:
+    # commit コマンドの結果。設計書 3.1節(I-3)。
+
+    changed: bool              # 変更があったか
+    commit: Commit | None      # 作成された版(changed=False なら None)
+    state: WorkState           # commit 時点での作業フォルダの状態
+    new_branch: bool = False   # 新しいブランチが作られたか
+
+
+@dataclass(slots=True)
+class MoveResult:
+    # undo/redo/goto/discard/sync の結果。設計書 3.1節(I-3)。
+
+    changed: bool                      # 現在位置が変わったか
+    before: Head                       # 操作前の位置とブランチ
+    after: Head                        # 操作後の位置とブランチ
+    auto_commit: Commit | None = None  # 自動コミット(あれば)
+    restored: list[str] = field(default_factory=list)  # 復元されたパス
+    deleted: list[str] = field(default_factory=list)   # 削除されたパス
+
+
+@dataclass(slots=True)
+class Config:
+    # 設定(config.json の内容)。設計書 1.1節・3.1節。
+
+    track: list[str]                                    # 追跡対象のパターン
+    ignore: list[str] = field(default_factory=list)     # 除外パターン
+    rules: list[dict] = field(default_factory=list)     # パターンごとの chunker/compression
+    chunker: dict = field(default_factory=lambda: {"name": "fixed", "size": 4194304})  # 既定の分割方式
+    compression: str = "auto"                           # 既定の圧縮("auto", "zlib", "none")
+    verify_chunks: str = "exists"                       # チャンク検証の強度("exists", "full")
+    threads: int = 0                                    # ワーカースレッド数(0 = CPU数)
