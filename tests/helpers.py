@@ -156,3 +156,75 @@ def tree_hashes(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> dict[str, s
     return {
         p.relative_to(root).as_posix(): sha256_file(p) for p in iter_files(root, exclude)
     }
+
+
+# ---------------------------------------------------------------------------
+# 破損の再現(実装計画書 6.4節)
+# ---------------------------------------------------------------------------
+
+class FaultAt:
+    """障害注入のフック(実装計画書 6.2節)。fsutil._fault_hook に差し込む。
+
+    段階名が stage に一致したら、count 回目に exc を送出する。呼ばれた段階名を calls に記録する。
+    stage に None を渡すと、記録だけする。
+    """
+
+    def __init__(self, stage: str | None = None, exc: BaseException | None = None, count: int = 1):
+        self.stage = stage
+        self.exc = exc if exc is not None else OSError("注入した障害")
+        self.count = count
+        self.calls: list[str] = []
+        self._seen = 0
+
+    def __call__(self, stage: str) -> None:
+        self.calls.append(stage)
+        if stage == self.stage:
+            self._seen += 1
+            if self._seen == self.count:
+                raise self.exc
+
+
+def flip_byte(path: Path, offset: int = -1) -> None:
+    """offset の1バイトを反転する(負数は末尾から)。"""
+    data = bytearray(path.read_bytes())
+    data[offset] ^= 0xFF
+    path.write_bytes(bytes(data))
+
+
+def truncate_file(path: Path, size: int) -> None:
+    with open(path, "r+b") as f:
+        f.truncate(size)
+
+
+def set_first_byte(path: Path, value: int) -> None:
+    """先頭1バイト(チャンクの codec ID)を書き換える。"""
+    data = bytearray(path.read_bytes())
+    data[0] = value
+    path.write_bytes(bytes(data))
+
+
+def break_json(path: Path) -> None:
+    """JSON として読めない内容にする。"""
+    path.write_bytes(path.read_bytes()[:-3] + b"\x00{")
+
+
+def try_symlink(target: Path, link: Path, target_is_directory: bool = False) -> bool:
+    """シンボリックリンクを作る。権限などで作れなければ False。"""
+    try:
+        os.symlink(target, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError):
+        return False
+    return True
+
+
+def try_junction(target: Path, link: Path) -> bool:
+    """Windows のジャンクションを作る(Windows 以外・作れなければ False)。"""
+    if os.name != "nt":
+        return False
+    try:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    except (ImportError, OSError):
+        return False
+    return True
