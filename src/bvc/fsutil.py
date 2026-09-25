@@ -34,14 +34,14 @@ FORMAT = 1
 
 
 def fault(stage: str) -> None:
-    """障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼ぶ。"""
+    # 障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼ぶ。
     hook = _fault_hook
     if hook is not None:
         hook(stage)
 
 
 def now_iso() -> str:
-    """記録用の現在時刻(ローカル時刻、秒まで、UTC オフセット付き)。"""
+    # 記録用の現在時刻(ローカル時刻、秒まで、UTC オフセット付き)。
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -54,11 +54,9 @@ _UNC_PREFIX = "\\\\?\\UNC\\"
 
 
 def os_path(base: str | os.PathLike[str], rel: str = "") -> str:
-    """base/rel を OS の API に渡す文字列にする。
-
-    Windows で LONG_PATH_THRESHOLD 以上の長さなら \\\\?\\ を付ける(UNC は \\\\?\\UNC\\)。
-    他の OS、短いパスではそのまま返す。rel は '/' 区切りの相対パス。
-    """
+    # base/rel を OS の API に渡す文字列にする。
+    # Windows で LONG_PATH_THRESHOLD 以上の長さなら \\?\ を付ける(UNC は \\?\UNC\)。
+    # 他の OS、短いパスではそのまま返す。rel は '/' 区切りの相対パス。
     p = os.fspath(base)
     if rel:
         p = os.path.join(p, *rel.split("/"))
@@ -86,11 +84,9 @@ def _real(p: str | os.PathLike[str]) -> str:
 
 
 def same_or_inside(root: str | os.PathLike[str], p: str | os.PathLike[str]) -> bool:
-    """p が root と同じか、その内側にあるか。
-
-    両側を realpath してから比べる(ネットワークドライブ・subst が UNC に書き換わるため)。
-    Windows では大文字小文字を区別しない。
-    """
+    # p が root と同じか、その内側にあるか。
+    # 両側を realpath してから比べる(ネットワークドライブ・subst が UNC に書き換わるため)。
+    # Windows では大文字小文字を区別しない。
     r = _real(root)
     q = _real(p)
     if q == r:
@@ -99,7 +95,7 @@ def same_or_inside(root: str | os.PathLike[str], p: str | os.PathLike[str]) -> b
 
 
 def is_link_or_reparse(st: os.stat_result) -> bool:
-    """シンボリックリンク、またはリパースポイント(ジャンクションなど)か。lstat の結果を渡す。"""
+    # シンボリックリンク、またはリパースポイント(ジャンクションなど)か。lstat の結果を渡す。
     if stat.S_ISLNK(st.st_mode):
         return True
     attrs = getattr(st, "st_file_attributes", 0)
@@ -122,21 +118,21 @@ _RESERVED = frozenset(
 
 
 def check_sha(s: Any) -> str:
-    """小文字16進64桁のハッシュ値か検査する。不正なら UnsafePath。"""
+    # 小文字16進64桁のハッシュ値か検査する。不正なら UnsafePath。
     if type(s) is not str or not _SHA_RE.fullmatch(s):
         raise UnsafePath(f"ハッシュ値の形式が不正です: {s!r:.80}")
     return s
 
 
 def check_id(n: Any) -> int:
-    """版番号・ブランチ番号(0 以上の整数)か検査する。不正なら UnsafePath。"""
+    # 版番号・ブランチ番号(0 以上の整数)か検査する。不正なら UnsafePath。
     if type(n) is not int or not 0 <= n <= MAX_ID:
         raise UnsafePath(f"番号の形式が不正です: {n!r:.80}")
     return n
 
 
 def check_id_str(s: Any) -> int:
-    """ファイル名などの文字列の番号(先頭ゼロなし)を検査して int にする。"""
+    # ファイル名などの文字列の番号(先頭ゼロなし)を検査して int にする。
     if type(s) is not str or not _ID_STR_RE.fullmatch(s):
         raise UnsafePath(f"番号の形式が不正です: {s!r:.80}")
     return check_id(int(s))
@@ -155,12 +151,10 @@ def _check_element(e: str, p: str) -> None:
 
 
 def check_relpath(p: Any) -> str:
-    """記録された相対パスを検査し、NFC に正規化して返す。不正なら UnsafePath。
-
-    '/' 区切りで、絶対パス・ドライブ指定・UNC・'\\'・'.'・'..'・空の要素・先頭の '.bvc'・
-    予約名・末尾のドットと空白・使用できない文字を含まないこと(仕様書 2.9節)。
-    OS によらず同じ規則で検査する。
-    """
+    # 記録された相対パスを検査し、NFC に正規化して返す。不正なら UnsafePath。
+    # '/' 区切りで、絶対パス・ドライブ指定・UNC・'\\'・'.'・'..'・空の要素・先頭の '.bvc'・
+    # 予約名・末尾のドットと空白・使用できない文字を含まないこと(仕様書 2.9節)。
+    # OS によらず同じ規則で検査する。
     if type(p) is not str or not p:
         raise UnsafePath(f"パスが空か文字列ではありません: {p!r:.80}")
     p = unicodedata.normalize("NFC", p)
@@ -175,12 +169,10 @@ def check_relpath(p: Any) -> str:
 
 
 def resolve_in_workdir(workdir: str | os.PathLike[str], rel: str) -> Path:
-    """作業ファイルへ書き込む・削除する直前の検査。workdir/rel を返す。
-
-    rel を check_relpath で検査し、途中のフォルダと対象自身がシンボリックリンク・
-    ジャンクションでないこと、途中がフォルダであること、結果が workdir の内側に
-    あることを確認する。途中のフォルダが存在しなければ、そこから先の確認は省く(後で作るため)。
-    """
+    # 作業ファイルへ書き込む・削除する直前の検査。workdir/rel を返す。
+    # rel を check_relpath で検査し、途中のフォルダと対象自身がシンボリックリンク・
+    # ジャンクションでないこと、途中がフォルダであること、結果が workdir の内側に
+    # あることを確認する。途中のフォルダが存在しなければ、そこから先の確認は省く(後で作るため)。
     rel = check_relpath(rel)
     workdir = Path(workdir)
     current = workdir
@@ -206,14 +198,14 @@ def resolve_in_workdir(workdir: str | os.PathLike[str], rel: str) -> Path:
 # ---------------------------------------------------------------------------
 
 def canonical_json(obj: Any) -> bytes:
-    """正規化 JSON(キー順固定、区切りの空白なし、UTF-8)。マニフェスト名などのハッシュに使う。"""
+    # 正規化 JSON(キー順固定、区切りの空白なし、UTF-8)。マニフェスト名などのハッシュに使う。
     return json.dumps(
         obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
 
 
 def fsync_dir(path: str | os.PathLike[str]) -> None:
-    """フォルダのエントリの変更を確定させる(POSIX のみ。Windows では何もしない)。"""
+    # フォルダのエントリの変更を確定させる(POSIX のみ。Windows では何もしない)。
     if IS_WINDOWS:
         return
     fd = os.open(os_path(path), os.O_RDONLY)
@@ -228,7 +220,7 @@ def makedirs(path: str | os.PathLike[str]) -> None:
 
 
 def new_tmp_path(tmpdir: str | os.PathLike[str]) -> Path:
-    """tmpdir の中に一意な一時ファイル名を用意する(tmpdir が無ければ作る)。"""
+    # tmpdir の中に一意な一時ファイル名を用意する(tmpdir が無ければ作る)。
     makedirs(tmpdir)
     return Path(tmpdir) / f"{uuid.uuid4().hex}.tmp"
 
@@ -241,7 +233,7 @@ def remove_quietly(path: str | os.PathLike[str]) -> None:
 
 
 def replace(src: str | os.PathLike[str], dst: str | os.PathLike[str], stage: str) -> None:
-    """os.replace の前に障害注入の地点 'replace:<stage>' を置いたもの。"""
+    # os.replace の前に障害注入の地点 'replace:<stage>' を置いたもの。
     fault(f"replace:{stage}")
     os.replace(os_path(src), os_path(dst))
 
@@ -249,11 +241,9 @@ def replace(src: str | os.PathLike[str], dst: str | os.PathLike[str], stage: str
 def atomic_write(
     path: str | os.PathLike[str], data: bytes, tmpdir: str | os.PathLike[str]
 ) -> None:
-    """tmp に書いて fsync し、os.replace で置き換える。途中で失敗しても元のファイルは残る。
-
-    tmpdir は置き換え先と同じボリュームにあること(通常は .bvc/tmp)。
-    障害注入の地点は、tmp を書き終えて置き換える直前('atomic_write:<ファイル名>')。
-    """
+    # tmp に書いて fsync し、os.replace で置き換える。途中で失敗しても元のファイルは残る。
+    # tmpdir は置き換え先と同じボリュームにあること(通常は .bvc/tmp)。
+    # 障害注入の地点は、tmp を書き終えて置き換える直前('atomic_write:<ファイル名>')。
     path = Path(path)
     tmp = new_tmp_path(tmpdir)
     try:
@@ -283,10 +273,8 @@ def read_bytes(path: str | os.PathLike[str]) -> bytes:
 
 
 def check_format(obj: Any, what: str, known: Iterable[int] = (FORMAT,)) -> dict:
-    """JSON の値が dict で、既知の format を持つか検査する。
-
-    format が無い・整数でないなら CorruptData、知らない番号なら UnsupportedFormat(V-2)。
-    """
+    # JSON の値が dict で、既知の format を持つか検査する。
+    # format が無い・整数でないなら CorruptData、知らない番号なら UnsupportedFormat(V-2)。
     if not isinstance(obj, dict):
         raise CorruptData(f"{what}: 形式が不正です")
     fmt = obj.get("format")
@@ -300,11 +288,9 @@ def check_format(obj: Any, what: str, known: Iterable[int] = (FORMAT,)) -> dict:
 
 
 def load_json(path: str | os.PathLike[str], what: str) -> dict:
-    """JSON ファイルを読み、format を検査して返す。
-
-    ファイルが無ければ FileNotFoundError。解析できない・形式不正なら CorruptData。
-    読み込み自体の OSError(使用中など)は破損の証拠ではないので、そのまま送出する(D-15)。
-    """
+    # JSON ファイルを読み、format を検査して返す。
+    # ファイルが無ければ FileNotFoundError。解析できない・形式不正なら CorruptData。
+    # 読み込み自体の OSError(使用中など)は破損の証拠ではないので、そのまま送出する(D-15)。
     data = read_bytes(path)
     try:
         obj = json.loads(data.decode("utf-8"))
@@ -318,11 +304,9 @@ def load_json(path: str | os.PathLike[str], what: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def append_jsonl(path: str | os.PathLike[str], obj: dict) -> None:
-    """1行を末尾に追記して fsync する。書き換え・切り詰めはしない。
-
-    前回の書き込みが途中で終わって最終行に改行が無い場合は、先に改行を足して、
-    新しい行が壊れた行とつながらないようにする。
-    """
+    # 1行を末尾に追記して fsync する。書き換え・切り詰めはしない。
+    # 前回の書き込みが途中で終わって最終行に改行が無い場合は、先に改行を足して、
+    # 新しい行が壊れた行とつながらないようにする。
     path = Path(path)
     line = canonical_json(obj) + b"\n"
     makedirs(path.parent)
@@ -342,12 +326,10 @@ def append_jsonl(path: str | os.PathLike[str], obj: dict) -> None:
 def read_jsonl(
     path: str | os.PathLike[str], what: str, known: Iterable[int] = (FORMAT,)
 ) -> tuple[list[dict], list[str]]:
-    """JSONL を読み、(記録の一覧, 警告の一覧) を返す。ファイルが無ければ空。
-
-    - 最終行(改行で終わっていない行)が壊れていれば、書き込み途中とみなして黙って無視する。
-    - 途中の行が壊れていれば、読み飛ばして警告を返す(C-8)。
-    - 知らない format の行は、壊れた行と区別して UnsupportedFormat で中止する(設計書 2.6節)。
-    """
+    # JSONL を読み、(記録の一覧, 警告の一覧) を返す。ファイルが無ければ空。
+    # - 最終行(改行で終わっていない行)が壊れていれば、書き込み途中とみなして黙って無視する。
+    # - 途中の行が壊れていれば、読み飛ばして警告を返す(C-8)。
+    # - 知らない format の行は、壊れた行と区別して UnsupportedFormat で中止する(設計書 2.6節)。
     known = tuple(known)
     try:
         data = read_bytes(path)
@@ -420,7 +402,7 @@ class FileLock:
         self._held = True
 
     def read_info(self) -> dict:
-        """ロックファイルの内容(読めなければ空)。"""
+        # ロックファイルの内容(読めなければ空)。
         try:
             obj = json.loads(read_bytes(self.path).decode("utf-8"))
         except (OSError, UnicodeDecodeError, ValueError):
@@ -446,11 +428,9 @@ class FileLock:
 # ---------------------------------------------------------------------------
 
 def _glob_to_regex(pattern: str) -> str:
-    """'/' 区切りの glob を正規表現にする。
-
-    '*' と '?' は '/' を越えない。'**' だけの要素は0階層以上のフォルダに一致する。
-    それ以外の文字はそのまま照合する。
-    """
+    # '/' 区切りの glob を正規表現にする。
+    # '*' と '?' は '/' を越えない。'**' だけの要素は0階層以上のフォルダに一致する。
+    # それ以外の文字はそのまま照合する。
     elements = pattern.split("/")
     out: list[str] = []
     n = len(elements)
@@ -479,5 +459,5 @@ def compile_glob(pattern: str, ignore_case: bool = IS_WINDOWS) -> re.Pattern[str
 
 
 def glob_match(pattern: str, relpath: str, ignore_case: bool = IS_WINDOWS) -> bool:
-    """'/' 区切りの相対パスが glob に一致するか。Windows では既定で大文字小文字を区別しない。"""
+    # '/' 区切りの相対パスが glob に一致するか。Windows では既定で大文字小文字を区別しない。
     return compile_glob(pattern, ignore_case).fullmatch(relpath) is not None

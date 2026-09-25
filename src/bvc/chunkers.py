@@ -19,18 +19,18 @@ class Chunker(ABC):
 
     @abstractmethod
     def params(self) -> dict:
-        """マニフェストに記録する設定(name を含む)。"""
+        # マニフェストに記録する設定(name を含む)。
+        pass
 
     @abstractmethod
     def split(self, f: BinaryIO) -> Iterator[tuple[bytes, bool]]:
-        """(断片, チャンク終端か) を逐次返す。断片は最大 READ_SIZE。
-
-        チャンクが断片より大きくても、メモリに全体を載せずに済む。空ファイルでは何も返さない。
-        """
+        # (断片, チャンク終端か) を逐次返す。断片は最大 READ_SIZE。
+        # チャンクが断片より大きくても、メモリに全体を載せずに済む。空ファイルでは何も返さない。
+        pass
 
 
 def _read_limited(f: BinaryIO, limit: int | None) -> Iterator[bytes]:
-    """f から最大 limit バイト(None なら末尾まで)を READ_SIZE 以下の断片で返す。"""
+    # f から最大 limit バイト(None なら末尾まで)を READ_SIZE 以下の断片で返す。
     remaining = limit
     while remaining is None or remaining > 0:
         n = READ_SIZE if remaining is None else min(READ_SIZE, remaining)
@@ -43,7 +43,7 @@ def _read_limited(f: BinaryIO, limit: int | None) -> Iterator[bytes]:
 
 
 def _mark_last(pieces: Iterator[bytes]) -> Iterator[tuple[bytes, bool]]:
-    """最後の断片にだけ True を付ける(1つ先読みする)。"""
+    # 最後の断片にだけ True を付ける(1つ先読みする)。
     prev = None
     for piece in pieces:
         if prev is not None:
@@ -95,7 +95,7 @@ CHUNKERS: dict[str, type[Chunker]] = {
 
 
 def make_chunker(spec: Any) -> Chunker:
-    """設定値 {"name": ..., その他の params} から Chunker を作る。不正なら ValueError。"""
+    # 設定値 {"name": ..., その他の params} から Chunker を作る。不正なら ValueError。
     if not isinstance(spec, dict) or type(spec.get("name")) is not str:
         raise ValueError(f"chunker の指定が不正です: {spec!r}")
     cls = CHUNKERS.get(spec["name"])

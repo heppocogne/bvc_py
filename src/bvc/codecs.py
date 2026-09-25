@@ -36,15 +36,15 @@ class Codec(ABC):
 
     @abstractmethod
     def encoder(self) -> Encoder:
-        """逐次圧縮用の Encoder を返す(大きなチャンク用)。"""
+        # 逐次圧縮用の Encoder を返す(大きなチャンク用)。
+        pass
 
     @abstractmethod
     def iter_decode(self, pieces: Iterable[bytes], limit: int) -> Iterator[bytes]:
-        """ペイロードの断片を逐次復号する。
-
-        復号後の合計が limit を超えそうになった時点で CorruptData を送出する
-        (改ざんされたデータでメモリを使い果たさないため。C-9)。
-        """
+        # ペイロードの断片を逐次復号する。
+        # 復号後の合計が limit を超えそうになった時点で CorruptData を送出する
+        # (改ざんされたデータでメモリを使い果たさないため。C-9)。
+        pass
 
     def decode(self, data: bytes, limit: int) -> bytes:
         return b"".join(self.iter_decode((data,), limit))
@@ -141,7 +141,7 @@ CODECS_BY_NAME: dict[str, Codec] = {c.name: c for c in _CODECS}
 
 
 def get_codec(codec_id: int) -> Codec:
-    """codec ID から Codec を得る。知らない ID なら UnsupportedFormat(V-2)。"""
+    # codec ID から Codec を得る。知らない ID なら UnsupportedFormat(V-2)。
     try:
         return CODECS_BY_ID[codec_id]
     except KeyError:
@@ -151,11 +151,9 @@ def get_codec(codec_id: int) -> Codec:
 
 
 def choose_codec(policy: str, data: bytes) -> Codec:
-    """圧縮の方針から Codec を選ぶ。
-
-    "none" → raw、"zlib" → zlib、
-    "auto" → 先頭 256KiB を zlib L1 で試し、圧縮率が 0.95 を超えれば raw(圧縮が効かない)。
-    """
+    # 圧縮の方針から Codec を選ぶ。
+    # "none" → raw、"zlib" → zlib、
+    # "auto" → 先頭 256KiB を zlib L1 で試し、圧縮率が 0.95 を超えれば raw(圧縮が効かない)。
     if policy == "none":
         return CODECS_BY_NAME["raw"]
     if policy == "zlib":

@@ -22,7 +22,7 @@ class Manifest:
 
 @dataclass(slots=True)
 class PutStats:
-    """put_file 1回分の保存の統計。"""
+    # put_file 1回分の保存の統計。
 
     size: int = 0          # ファイルのバイト数
     chunks: int = 0        # チャンク数(重複を含む)
@@ -40,7 +40,7 @@ class PutStats:
 
 @dataclass(frozen=True, slots=True)
 class ProgressEvent:
-    """時間のかかる処理の進捗(GUI・CLI の表示用)。"""
+    # 時間のかかる処理の進捗(GUI・CLI の表示用)。
 
     stage: str                 # 段階名(例: "put", "write", "verify_chunks")
     done: int                  # 処理済みの量(バイト数または件数)
@@ -50,7 +50,7 @@ class ProgressEvent:
 
 @dataclass(slots=True)
 class StoreVerifyResult:
-    """store 単体の全件検証の結果(verify の土台)。"""
+    # store 単体の全件検証の結果(verify の土台)。
 
     checked_chunks: int = 0
     checked_manifests: int = 0

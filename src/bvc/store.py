@@ -50,11 +50,9 @@ def _check_check(check: str) -> None:
 # ---------------------------------------------------------------------------
 
 class Health:
-    """health.json(壊れたチャンク・マニフェスト・版の記録)の読み書き。スレッドセーフ。
-
-    壊れていたら空として扱い、次の書き込みで作り直す(警告を warnings に残す)。
-    知らない format なら UnsupportedFormat(何も書かない)。
-    """
+    # health.json(壊れたチャンク・マニフェスト・版の記録)の読み書き。スレッドセーフ。
+    # 壊れていたら空として扱い、次の書き込みで作り直す(警告を warnings に残す)。
+    # 知らない format なら UnsupportedFormat(何も書かない)。
 
     def __init__(self, repodir: str | os.PathLike[str]) -> None:
         repodir = Path(repodir)
@@ -139,7 +137,7 @@ def manifest_to_json(m: Manifest) -> dict:
 
 
 def manifest_sha(m: Manifest) -> str:
-    """マニフェストの名前(正規化 JSON の SHA-256)。"""
+    # マニフェストの名前(正規化 JSON の SHA-256)。
     return _sha256(fsutil.canonical_json(manifest_to_json(m)))
 
 
@@ -148,7 +146,7 @@ def _is_int(v: Any) -> bool:
 
 
 def manifest_from_json(obj: Any) -> Manifest:
-    """JSON の値を検査して Manifest にする。形式が不正なら CorruptData、知らない format なら UnsupportedFormat。"""
+    # JSON の値を検査して Manifest にする。形式が不正なら CorruptData、知らない format なら UnsupportedFormat。
     fsutil.check_format(obj, "マニフェスト")
 
     def bad(why: str) -> CorruptData:
@@ -182,7 +180,7 @@ def manifest_from_json(obj: Any) -> Manifest:
 # ---------------------------------------------------------------------------
 
 class _Inflight:
-    """処理中のチャンクの件数・バイト数を制限する(メモリ使用量を抑えるため)。"""
+    # 処理中のチャンクの件数・バイト数を制限する(メモリ使用量を抑えるため)。
 
     def __init__(self, max_count: int, max_bytes: int) -> None:
         self._cond = threading.Condition()
@@ -273,10 +271,8 @@ class ObjectStore:
     # --- 隔離 ---
 
     def quarantine(self, kind: str, sha: str, reason: str) -> None:
-        """壊れたチャンク・マニフェストを quarantine/ へ移し、health.json に記録する。
-
-        以後は存在しないものとして扱う(C-5)。ファイルが無ければ記録だけ行う。
-        """
+        # 壊れたチャンク・マニフェストを quarantine/ へ移し、health.json に記録する。
+        # 以後は存在しないものとして扱う(C-5)。ファイルが無ければ記録だけ行う。
         if kind == "chunk":
             src, name, hkind = self.chunk_path(sha), sha, "bad_chunks"
         elif kind == "manifest":
@@ -302,12 +298,10 @@ class ObjectStore:
     # --- チャンク ---
 
     def has_chunk(self, sha: str, check: str = "exists", length: int | None = None) -> bool:
-        """チャンクが使える状態であるか。
-
-        check="exists": ファイルがあり、ヘッダの codec ID が既知で、隔離記録に無い。
-        check="full"  : さらに読み出して復号し、ハッシュ(と length が分かれば長さ)を照合する。
-        異常を見つけたら隔離して False を返す。知らない codec ID なら UnsupportedFormat。
-        """
+        # チャンクが使える状態であるか。
+        # check="exists": ファイルがあり、ヘッダの codec ID が既知で、隔離記録に無い。
+        # check="full"  : さらに読み出して復号し、ハッシュ(と length が分かれば長さ)を照合する。
+        # 異常を見つけたら隔離して False を返す。知らない codec ID なら UnsupportedFormat。
         _check_check(check)
         path = self.chunk_path(sha)
         if self.health.is_bad("bad_chunks", sha):
@@ -331,14 +325,12 @@ class ObjectStore:
         return True
 
     def put_chunk(self, data: bytes, check: str = "exists") -> ChunkRef:
-        """チャンクを保存する。has_chunk(sha, check) が False なら書き込む(スレッドセーフ)。
-
-        隔離済み・欠損・破損のチャンクは、ここで作り直される。
-        """
+        # チャンクを保存する。has_chunk(sha, check) が False なら書き込む(スレッドセーフ)。
+        # 隔離済み・欠損・破損のチャンクは、ここで作り直される。
         return self._put_chunk(data, check)[0]
 
     def _put_chunk(self, data: bytes, check: str) -> tuple[ChunkRef, int]:
-        """(ChunkRef, 新しく書いたファイルのバイト数) を返す。既存のチャンクなら後者は 0。"""
+        # (ChunkRef, 新しく書いたファイルのバイト数) を返す。既存のチャンクなら後者は 0。
         _check_check(check)
         ref = ChunkRef(_sha256(data), len(data))
         with self._stripe(ref.sha):
@@ -353,7 +345,7 @@ class ObjectStore:
     def put_chunk_stream(
         self, pieces: Iterable[bytes], compression: str | None = None, check: str = "exists"
     ) -> ChunkRef:
-        """大きなチャンクを、メモリに載せずに保存する。"""
+        # 大きなチャンクを、メモリに載せずに保存する。
         return self._put_chunk_stream(pieces, compression, check)[0]
 
     def _put_chunk_stream(
@@ -409,7 +401,7 @@ class ObjectStore:
         return tmp
 
     def _install_chunk(self, tmp: Path, sha: str) -> None:
-        """tmp をハッシュ名へ置き換え、隔離記録を消す。失敗したら tmp を消す。"""
+        # tmp をハッシュ名へ置き換え、隔離記録を消す。失敗したら tmp を消す。
         dst = self.chunk_path(sha)
         try:
             fsutil.fault("chunk_write")
@@ -422,17 +414,15 @@ class ObjectStore:
         self.health.clear("bad_chunks", sha)
 
     def open_chunk(self, sha: str, length: int) -> Iterator[bytes]:
-        """チャンクを逐次復号して断片を返す。
-
-        最後にハッシュと長さを照合し、異常なら隔離して CorruptData を送出する。
-        照合の前に断片を返すので、呼び出し側は最後まで読み切ってから結果を確定させること。
-        """
+        # チャンクを逐次復号して断片を返す。
+        # 最後にハッシュと長さを照合し、異常なら隔離して CorruptData を送出する。
+        # 照合の前に断片を返すので、呼び出し側は最後まで読み切ってから結果を確定させること。
         if not _is_int(length) or length < 0:
             raise ValueError(f"length が不正: {length!r}")
         return self._open_verified(sha, length)
 
     def get_chunk(self, sha: str, length: int) -> bytes:
-        """小さなチャンク用。復号後のサイズは length を上限にする(C-9)。"""
+        # 小さなチャンク用。復号後のサイズは length を上限にする(C-9)。
         return b"".join(self.open_chunk(sha, length))
 
     def _open_verified(self, sha: str, length: int | None) -> Iterator[bytes]:
@@ -472,7 +462,7 @@ class ObjectStore:
             raise CorruptData(f"チャンクが壊れています({error}): {sha}", sha=sha, reason=error)
 
     def iter_chunks(self) -> Iterator[str]:
-        """保存されているチャンクの sha(名前の形式が正しいものだけ)。"""
+        # 保存されているチャンクの sha(名前の形式が正しいものだけ)。
         yield from self._iter_names(self.repodir / "chunks", "")
 
     def delete_chunk(self, sha: str) -> None:
@@ -482,7 +472,7 @@ class ObjectStore:
     # --- マニフェスト ---
 
     def put_manifest(self, m: Manifest) -> str:
-        """マニフェストを保存して名前を返す。同名のファイルが同じ内容なら書かない。"""
+        # マニフェストを保存して名前を返す。同名のファイルが同じ内容なら書かない。
         data = fsutil.canonical_json(manifest_to_json(m))
         sha = _sha256(data)
         path = self.manifest_path(sha)
@@ -501,7 +491,7 @@ class ObjectStore:
         return sha
 
     def get_manifest(self, sha: str) -> Manifest:
-        """名前とのハッシュ照合、JSON と値の形式検査をして読む。異常なら隔離して CorruptData。"""
+        # 名前とのハッシュ照合、JSON と値の形式検査をして読む。異常なら隔離して CorruptData。
         path = self.manifest_path(sha)
         if self.health.is_bad("bad_manifests", sha):
             raise CorruptData(f"マニフェストは壊れているため隔離済みです: {sha}", sha=sha)
@@ -529,7 +519,7 @@ class ObjectStore:
             raise fail("invalid", e) from e
 
     def manifest_ok(self, sha: str, check: str = "exists") -> bool:
-        """マニフェストと、その全チャンクが健全か。"""
+        # マニフェストと、その全チャンクが健全か。
         _check_check(check)
         try:
             m = self.get_manifest(sha)
@@ -585,13 +575,11 @@ class ObjectStore:
         progress: ProgressFn | None = None,
         path: str | None = None,
     ) -> tuple[str, PutStats]:
-        """ファイルを分割して保存し、(マニフェストの sha, 統計) を返す。
-
-        読み込み・分割・全体の SHA-256 はメインスレッドで行い、チャンクのハッシュ計算・圧縮・書き込みは
-        ワーカーで行う。処理中のチャンクは threads×2 件(かつ MAX_INFLIGHT_BYTES)までに制限する。
-        大きなチャンク(STREAM_THRESHOLD 超、whole)はメインスレッドで逐次保存する。
-        path は進捗表示用。
-        """
+        # ファイルを分割して保存し、(マニフェストの sha, 統計) を返す。
+        # 読み込み・分割・全体の SHA-256 はメインスレッドで行い、チャンクのハッシュ計算・圧縮・書き込みは
+        # ワーカーで行う。処理中のチャンクは threads×2 件(かつ MAX_INFLIGHT_BYTES)までに制限する。
+        # 大きなチャンク(STREAM_THRESHOLD 超、whole)はメインスレッドで逐次保存する。
+        # path は進捗表示用。
         _check_check(check)
         ck = make_chunker(chunker)
         total_size = _file_size(f)
@@ -665,7 +653,7 @@ class ObjectStore:
         return self.put_manifest(m), stats
 
     def build_manifest(self, f: BinaryIO, chunker: dict) -> Manifest:
-        """保存せずにマニフェストを組み立てる(変更検出用)。"""
+        # 保存せずにマニフェストを組み立てる(変更検出用)。
         ck = make_chunker(chunker)
         full = hashlib.sha256()
         refs: list[ChunkRef] = []
@@ -685,7 +673,7 @@ class ObjectStore:
         return Manifest(size=size, sha256=full.hexdigest(), chunker=ck.params(), chunks=tuple(refs))
 
     def hash_file(self, f: BinaryIO, chunker: dict) -> str:
-        """保存せずにマニフェストの sha を計算する(変更検出用)。"""
+        # 保存せずにマニフェストの sha を計算する(変更検出用)。
         return manifest_sha(self.build_manifest(f, chunker))
 
     def write_file(
@@ -695,10 +683,8 @@ class ObjectStore:
         progress: ProgressFn | None = None,
         path: str | None = None,
     ) -> None:
-        """マニフェストの内容を out に逐次書き出し、全体の SHA-256 を照合する(メモリ使用量は一定)。
-
-        異常なら CorruptData(書き出した内容は使わないこと)。
-        """
+        # マニフェストの内容を out に逐次書き出し、全体の SHA-256 を照合する(メモリ使用量は一定)。
+        # 異常なら CorruptData(書き出した内容は使わないこと)。
         m = self.get_manifest(sha)
         h = hashlib.sha256()
         total = 0
@@ -720,13 +706,11 @@ class ObjectStore:
     def verify_all(
         self, quick: bool = False, progress: ProgressFn | None = None
     ) -> StoreVerifyResult:
-        """保存されている全チャンク・全マニフェストを検証する(verify の土台)。
-
-        quick=False: 全チャンクを復号してハッシュを照合する(並列)。
-        quick=True : チャンクはヘッダの確認だけ(raw なら長さも確認する)。
-        マニフェストは、参照するチャンクが揃っていて長さが合うかを確認する。
-        壊れたチャンク・マニフェストは隔離する。
-        """
+        # 保存されている全チャンク・全マニフェストを検証する(verify の土台)。
+        # quick=False: 全チャンクを復号してハッシュを照合する(並列)。
+        # quick=True : チャンクはヘッダの確認だけ(raw なら長さも確認する)。
+        # マニフェストは、参照するチャンクが揃っていて長さが合うかを確認する。
+        # 壊れたチャンク・マニフェストは隔離する。
         res = StoreVerifyResult()
         chunks = list(self.iter_chunks())
         lengths: dict[str, int | None] = {}  # 健全なチャンク → 長さ(不明なら None)
