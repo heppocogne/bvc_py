@@ -16,7 +16,9 @@ from .fsutil import (
     check_relpath,
     check_sha,
     load_json,
+    makedirs,
     now_iso,
+    os_path,
     read_jsonl,
 )
 from .model import Commit, Head, Note
@@ -279,6 +281,9 @@ class History:
     def branch_name(self, branch: int) -> str | None:
         return self._branches.get(branch)
 
+    def branch_names(self) -> dict[int, str]:
+        return dict(self._branches)
+
     def branch_by_name(self, name: str) -> int | None:
         # 名前の付いたブランチの番号(無ければ None)。
         return next((b for b, n in self._branches.items() if n == name), None)
@@ -292,21 +297,28 @@ class History:
                 pass
         return pinned
 
+    def tree_known(self, commit_id: int) -> bool:
+        # 版の tree を全部把握できているか(版ファイルが読めて、不正なパス・ハッシュが無い)。
+        # gc が「参照されていない」と判断してよいかの基準にする。
+        return self._commits.get(commit_id) is not None and commit_id not in self._broken
+
     def get_notes(self, commit_id: int) -> list[Note]:
-        # コメント(notes/<id>.jsonl)を読み込む(M4-1)。
-        notes_file = self._bvc_dir / "notes" / f"{commit_id}.jsonl"
-        if not notes_file.exists():
-            return []
-        records, warns = read_jsonl(notes_file, f"notes/{commit_id}.jsonl")
+        # コメント(notes/<id>.jsonl)を古い順に返す(M4-1)。壊れた行は読み飛ばす(C-8)。
+        what = f"notes/{commit_id}.jsonl"
+        records, warns = read_jsonl(self._notes_path(commit_id), what)
         for w in warns:
             logger.warning("%s", w)
         notes = []
         for r in records:
-            try:
-                notes.append(Note(commit_id=commit_id, time=r["time"], text=r["text"]))
-            except (KeyError, TypeError):
-                logger.warning("notes/%d.jsonl: 不正なコメント記録を読み飛ばしました: %r", commit_id, r)
+            time, text = r.get("time"), r.get("text")
+            if type(time) is str and type(text) is str:
+                notes.append(Note(commit_id=commit_id, time=time, text=text))
+            else:
+                logger.warning("%s: 不正なコメントを読み飛ばしました", what)
         return notes
+
+    def _notes_path(self, commit_id: int) -> Path:
+        return self._bvc_dir / "notes" / f"{check_id(commit_id)}.jsonl"
 
     # --- リビジョン式(M2-5、仕様書 2.3節、設計書 4.5節) ---
 
@@ -461,60 +473,78 @@ class History:
         # 操作ログ(oplog.jsonl)に1行追記する(M2-6、設計書 2.6節)。
         append_jsonl(self._bvc_dir / "oplog.jsonl", {"format": 1, "time": now_iso(), **entry})
 
-    # --- M4 以降 ---
+    # --- note / discard / branch(M4-1〜M4-3) ---
 
     def add_note(self, commit_id: int, text: str) -> Note:
-        # コメントを追記する(M4-1、設計書 2.6節)。
-        # 壊れた版にもコメントを付けられる。ファイルが無いなら新規作成。
-        notes_dir = self._bvc_dir / "notes"
-        notes_dir.mkdir(parents=True, exist_ok=True)
+        # コメントを追記する(M4-1、設計書 2.6節)。読み込み不可の版にも付けられる(仕様書 2.9節)。
+        if commit_id not in self._commits:
+            raise RevisionError(f"版 {commit_id} は存在しません")
         note = Note(commit_id=commit_id, time=now_iso(), text=text)
-        append_jsonl(
-            notes_dir / f"{commit_id}.jsonl",
-            {"format": 1, "time": note.time, "text": note.text},
-        )
+        path = self._notes_path(commit_id)
+        makedirs(path.parent)
+        append_jsonl(path, {"format": 1, "time": note.time, "text": note.text})
         return note
 
     def discard(self, commit_id: int) -> None:
-        # 削除印を付ける(M4-3、設計書 2.6節・4.11節)。
+        # 削除印を付ける(M4-3、設計書 2.6節)。子は読み込み時のつなぎ直しで親へつながる(4.4節)。
         if commit_id not in self._commits:
             raise RevisionError(f"版 {commit_id} は存在しません")
         if commit_id in self._discarded:
-            raise RevisionError(f"版 {commit_id} は既に削除済みです")
+            raise RevisionError(f"版 {commit_id} は削除済みです")
         append_jsonl(self._bvc_dir / "discarded.jsonl", {"format": 1, "time": now_iso(), "id": commit_id})
         self._discarded.add(commit_id)
-        # discarded を更新したので、つなぎ直しを再計算する
         self._rebuild()
 
-    def name_branch(self, branch: int, name: str) -> None:
-        # ブランチに名前を付ける(M4-2、設計書 2.4節)。
-        # 既存の名前を付け替える場合は、古い名前を削除する。
+    def name_branch(self, branch: int, name: str) -> int | None:
+        # ブランチに名前を付ける(M4-2)。同じ名前が別のブランチにあれば付け替え、元の番号を返す。
+        # ブランチの古い名前は外れる(1つのブランチに名前は1つ)。
         name = check_branch_name(name)
-        # 別のブランチが同じ名前を持つ場合は削除
-        for bid, bname in list(self._branches.items()):
-            if bname == name:
-                del self._branches[bid]
-        self._branches[branch] = name
-        # branches.json に書き込む
-        self._write_branches()
+        check_id(branch)
+        previous = self.branch_by_name(name)
+        names = {b: n for b, n in self._branches.items() if n != name}
+        names[branch] = name
+        self._write_branches(names)
+        return previous if previous != branch else None
 
-    def unname_branch(self, name: str) -> None:
-        # ブランチ名を削除する(M4-2)。
+    def unname_branch(self, name: str) -> int:
+        # 名前を外し、そのブランチの番号を返す(M4-2)。
         name = check_branch_name(name)
-        for bid, bname in list(self._branches.items()):
-            if bname == name:
-                del self._branches[bid]
-                self._write_branches()
-                return
-        raise RevisionError(f"ブランチ名 '{name}' はありません")
+        branch = self.branch_by_name(name)
+        if branch is None:
+            raise RevisionError(f"ブランチ '{name}' はありません")
+        self._write_branches({b: n for b, n in self._branches.items() if b != branch})
+        return branch
 
-    def _write_branches(self) -> None:
-        # branches.json を書き込む。
+    def _write_branches(self, names: dict[int, str]) -> None:
+        # 書き込みに成功してから、メモリ上の名前を置き換える。
         atomic_write_json(
             self._bvc_dir / "branches.json",
-            {"format": 1, "names": self._branches},
+            {"format": 1, "names": {str(b): n for b, n in sorted(names.items())}},
             self._tmp,
         )
+        self._branches = names
+
+    # --- gc 用(M4-4、設計書 4.8節) ---
+
+    def commit_paths(self, commit_id: int) -> list[Path]:
+        # 版を消すときに削除するファイル(版ファイル、コメント)。版ファイルを先に消す。
+        cid = check_id(commit_id)
+        return [self._bvc_dir / "commits" / f"{cid}.json", self._notes_path(cid)]
+
+    def note_ids(self) -> list[int]:
+        # notes/ にあるコメントの版番号(名前が不正なファイルは無視する)。
+        try:
+            with os.scandir(os_path(self._bvc_dir / "notes")) as it:
+                names = [e.name for e in it if e.name.endswith(".jsonl")]
+        except FileNotFoundError:
+            return []
+        ids = []
+        for name in names:
+            try:
+                ids.append(check_id_str(name[: -len(".jsonl")]))
+            except UnsafePath:
+                pass
+        return sorted(ids)
 
     def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> None:
         raise NotImplementedError("pin は M6 で実装する")

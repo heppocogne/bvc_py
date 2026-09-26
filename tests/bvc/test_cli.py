@@ -1,4 +1,4 @@
-# cli の単体テスト(M2-11, M2-12, M3-8)。観点: F-1, F-7, F-12, P-5。
+# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-4)。観点: F-1, F-7, F-12, F-14, P-5。
 
 import io
 import json
@@ -211,6 +211,83 @@ class TestLogTree(CliTestCase):
         lines = cli._graph_lines(entries)
         graph = [ln.split("  ")[0] for ln in lines]
         self.assertEqual(graph, ["○", "│ ○", "├─╯", "│ ○", "│ ○", "├─╯", "@"])
+
+
+class TestHistoryCommands(CliTestCase):
+    # M4-1〜M4-4(仕様書 3.6〜3.9節)。観点: F-1, F-12, F-14。
+
+    def setUp(self):
+        super().setUp()
+        self.write("a.bin", b"v0")
+        self.bvc("init", "--track", "*.bin")
+        for i in (1, 2):
+            self.write("a.bin", f"v{i}".encode())
+            self.bvc("commit", "-m", f"c{i}")
+
+    def notes(self):
+        code, out, _ = self.bvc("--json", "log", "--discarded")
+        return {e["id"]: [n["text"] for n in e["notes"]] for e in json.loads(out)["entries"]}
+
+    def test_f14_note_forms(self):
+        code, out, _ = self.bvc("note", "-m", "2")
+        self.assertEqual(code, 0)
+        self.assertIn("版 2(c2)にコメントを追加しました", out)
+        self.assertEqual(self.bvc("note", "-m", "2 回目")[0], 0)
+        self.assertEqual(self.bvc("note", "-m", "x", "-r", "0")[0], 0)
+        self.assertEqual(self.notes(), {2: ["2", "2 回目"], 1: [], 0: ["x"]})
+        code, out, _ = self.bvc("log")
+        self.assertIn("note: 2 回目", out)
+        for args in (("note",), ("note", "-m", ""), ("note", "2")):
+            with self.subTest(args=args):
+                self.assertEqual(self.bvc(*args)[0], 2)
+        self.assertEqual(self.bvc("note", "-m", "x", "-r", "9")[0], 1)
+        self.assertEqual(self.notes(), {2: ["2", "2 回目"], 1: [], 0: ["x"]})
+        code, out, _ = self.bvc("--json", "note", "-m", "j")
+        self.assertEqual(json.loads(out)["note"]["text"], "j")
+
+    def test_f1_branch(self):
+        code, out, _ = self.bvc("branch")
+        self.assertEqual((code, out), (0, "* (名前なし)  先端 2  分岐元 なし\n"))
+        self.bvc("undo")
+        self.write("a.bin", b"v3")
+        self.bvc("commit", "-m", "c3")
+        self.assertEqual(self.bvc("branch", "name", "本線", "2")[0], 0)
+        code, out, _ = self.bvc("branch")
+        self.assertEqual(out, "  本線        先端 2  分岐元 なし\n* (名前なし)  先端 3  分岐元 1\n")
+        code, out, _ = self.bvc("--json", "branch")
+        self.assertEqual([b["name"] for b in json.loads(out)["branches"]], ["本線", None])
+        self.assertEqual(self.bvc("goto", "本線")[0], 0)
+        code, out, _ = self.bvc("branch", "unname", "本線")
+        self.assertIn("名前 '本線' を外しました", out)
+        self.assertEqual(self.bvc("branch", "unname", "本線")[0], 1)
+        self.assertEqual(self.bvc("branch", "name", "12")[0], 2)
+
+    def test_f1_discard_and_gc(self):
+        code, out, _ = self.bvc("discard", "1")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "版 1 に削除の印を付けました\n")
+        code, out, _ = self.bvc("discard")
+        self.assertEqual(code, 0)
+        self.assertIn("版 0 に移動しました", out)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v0")
+        code, out, _ = self.bvc("gc", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("削除対象: 版 1, 2、マニフェスト 2、チャンク 2", out)
+        code, out, _ = self.bvc("gc")
+        self.assertIn("削除しました: 版 1, 2", out)
+        code, out, _ = self.bvc("--json", "gc")
+        self.assertEqual((code, json.loads(out)["changed"]), (0, False))
+        code, out, _ = self.bvc("gc")
+        self.assertIn("削除対象がありません", out)
+
+    def test_f12_discard_exit_codes(self):
+        self.bvc("goto", "0")
+        code, _, err = self.bvc("discard")  # 根の現在位置
+        self.assertEqual(code, 4)
+        self.assertIn("根", err)
+        self.assertEqual(self.bvc("discard", "9")[0], 1)
+        code, out, _ = self.bvc("--json", "discard", "2")
+        self.assertEqual((code, json.loads(out)["discarded"]), (0, 2))
 
 
 if __name__ == "__main__":

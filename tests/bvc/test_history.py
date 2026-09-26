@@ -1,4 +1,4 @@
-# history の単体テスト(M2-3〜M2-6)。観点: F-2, F-5, C-3, C-8, R-1(版の書き込み部分), V-2。
+# history の単体テスト(M2-3〜M2-6, M4-1〜M4-3)。観点: F-2, F-5, F-8, F-14, C-3, C-8, R-1(版の書き込み部分), V-2。
 
 import json
 import unittest
@@ -249,6 +249,66 @@ class TestNewCommitWriteOrder(HistoryTestCase):
         records, warns = fsutil.read_jsonl(self.bvc / "oplog.jsonl", "oplog")
         self.assertEqual([r["op"] for r in records], ["commit", "commit"])
         self.assertTrue(all("time" in r for r in records))
+
+
+class TestNotesDiscardBranches(HistoryTestCase):
+    # M4-1〜M4-3。観点: F-8, F-14, C-8。
+
+    def test_f14_notes_append_and_reload(self):
+        self.linear(2)
+        self.h.add_note(1, "a")
+        self.h.add_note(1, "b")
+        self.assertEqual([n.text for n in load(self.bvc).get_notes(1)], ["a", "b"])
+        self.assertEqual(self.h.get_notes(0), [])
+        with self.assertRaises(RevisionError):
+            self.h.add_note(9, "x")
+        self.assertEqual(self.h.note_ids(), [1])
+
+    def test_c8_invalid_note_records_are_skipped(self):
+        self.linear(1)
+        self.h.add_note(0, "ok")
+        fsutil.append_jsonl(self.bvc / "notes" / "0.jsonl", {"format": 1, "time": "t", "text": 5})
+        with self.assertLogs("bvc.history", "WARNING"):
+            self.assertEqual([n.text for n in self.h.get_notes(0)], ["ok"])
+
+    def test_f8_discard_persists_and_reconnects(self):
+        self.linear(3)
+        self.h.discard(1)
+        self.assertEqual(self.h.effective_parent(2), 0)
+        self.assertEqual(self.h.children(0), [2])
+        h = load(self.bvc)
+        self.assertTrue(h.is_discarded(1))
+        self.assertEqual(h.effective_parent(2), 0)
+        for cid in (1, 9):
+            with self.subTest(cid=cid), self.assertRaises(RevisionError):
+                h.discard(cid)
+
+    def test_branch_names(self):
+        self.linear(2)
+        self.assertIsNone(self.h.name_branch(0, "main"))
+        b1 = self.commit(0).branch  # 0 には子があるので新しいブランチ
+        self.assertEqual(self.h.name_branch(b1, "main"), 0)  # 付け替え(元のブランチ番号を返す)
+        self.h.name_branch(b1, "feat")  # 1つのブランチに名前は1つ
+        data = json.loads((self.bvc / "branches.json").read_text("utf-8"))
+        self.assertEqual(data["names"], {str(b1): "feat"})
+        self.assertEqual(load(self.bvc).branch_names(), {b1: "feat"})
+        self.assertEqual(self.h.unname_branch("feat"), b1)
+        with self.assertRaises(RevisionError):
+            self.h.unname_branch("feat")
+        with self.assertRaises(RevisionError):
+            self.h.name_branch(0, "1")
+        self.assertEqual(load(self.bvc).branch_names(), {})
+
+    def test_tree_known_and_commit_paths(self):
+        self.linear(2)
+        self.assertTrue(self.h.tree_known(1))
+        (self.bvc / "commits" / "1.json").write_bytes(b"{")
+        with self.assertLogs("bvc.history", "WARNING"):
+            h = load(self.bvc)
+        self.assertFalse(h.tree_known(1))
+        self.assertEqual(
+            [p.relative_to(self.bvc).as_posix() for p in h.commit_paths(1)], ["commits/1.json", "notes/1.jsonl"]
+        )
 
 
 if __name__ == "__main__":

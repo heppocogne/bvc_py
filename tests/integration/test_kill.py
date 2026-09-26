@@ -1,4 +1,4 @@
-# 強制終了テスト(M3-9、実装計画書 6.3節)。観点: R-1, R-2, R-3。
+# 強制終了テスト(M3-9、M4-4、実装計画書 6.3節)。観点: R-1, R-2, R-3, R-8。
 # 子プロセス(kill_driver.py)を指定の段階で kill し、次に開いたときに収束することを確かめる。
 
 from __future__ import annotations
@@ -134,3 +134,43 @@ def test_r1_kill_during_commit(workdir, driver, stage, count):
         assert files(workdir) == V0
         repo.goto(str(head.at))
         assert files(workdir) == EDITED
+
+
+# gc 用: 版 0〜3(a.bin の内容は a0〜a3)のうち 1 と 2 を削除済みにする。@ = 3
+GC_LIVING = {0: {"a.bin": b"a0"}, 3: {"a.bin": b"a3"}}
+
+
+def build_for_gc(root: Path) -> None:
+    write(root, "a.bin", b"a0")
+    with Repo.init(root, track=["*.bin"]) as repo:
+        for i in (1, 2, 3):
+            write(root, "a.bin", f"a{i}".encode())
+            repo.commit(f"c{i}")
+        repo.note("old", rev="2")
+        repo.discard("1")
+        repo.discard("2")
+    write(root / ".bvc" / "tmp", "left.tmp", b"garbage")
+
+
+def check_gc_converged(root: Path) -> None:
+    # 生きている版はすべて復元でき、もう一度 gc すれば完了する
+    with Repo.open(root) as repo:
+        for _ in range(2):
+            for cid, expected in GC_LIVING.items():
+                repo.goto(str(cid))
+                assert files(root) == expected
+            assert repo._store.verify_all().ok
+            repo.gc()
+        assert sorted(p.name for p in (repo.bvc_dir / "commits").iterdir()) == ["0.json", "3.json"]
+        assert list((repo.bvc_dir / "notes").iterdir()) == []
+
+
+GC_STAGES = [("gc:commit", 1), ("gc:commit", 2), ("gc:manifest", 1), ("gc:manifest", 2),
+             ("gc:chunk", 1), ("gc:chunk", 2), ("gc:tmp", 1), ("append_jsonl:oplog.jsonl", 1)]
+
+
+@pytest.mark.parametrize("stage,count", GC_STAGES)
+def test_r8_kill_during_gc(workdir, driver, stage, count):
+    build_for_gc(workdir)
+    driver(workdir, stage, count, "gc")
+    check_gc_converged(workdir)

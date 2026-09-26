@@ -178,42 +178,37 @@ class Config:
 
 @dataclass(frozen=True, slots=True)
 class BranchInfo:
-    # ブランチの情報。設計書 3.1節。
+    # ブランチの一覧の1行(branch コマンド)。仕様書 3.7節。
 
-    number: int              # ブランチ番号
-    name: str | None         # ブランチ名(無ければ None)
-    tip: int                 # 先端の版番号
-    parent_tip: int | None   # 親ブランチの先端の版番号(分岐元。無ければ None)
+    number: int              # 内部のブランチ番号(表示しない。--json での識別用)
+    name: str | None         # 名前(無ければ None)
+    tip: int | None          # 先端の版番号(生きている版が無ければ None)
+    fork: int | None         # 分岐元の版番号(このブランチの最初の版の親。根から始まるなら None)
+    is_current: bool         # 現在のブランチ(HEAD.branch)か
 
 
 @dataclass(slots=True)
 class DiscardResult:
-    # discard コマンドの結果。設計書 3.1節。
+    # discard の結果。仕様書 3.8節。
 
-    changed: bool                      # 削除状態が変わったか
-    before: Head                       # 操作前の位置とブランチ(削除前なら @)
-    after: Head                        # 操作後の位置とブランチ(削除された場合のみ復元される)
-    auto_commit: Commit | None = None  # 自動コミット(現在位置が削除された場合)
-    restored: list[str] = field(default_factory=list)  # 復元されたパス(ある場合)
-    deleted: list[str] = field(default_factory=list)   # 削除されたパス(ある場合)
+    changed: bool                      # 削除印を付けたか(付けられなければ例外にする)
+    discarded: int                     # 削除印を付けた版番号
+    before: Head                       # 操作前の位置とブランチ
+    after: Head                        # 操作後の位置とブランチ(現在位置を消したときは親へ移る)
+    auto_commit: Commit | None = None  # 移動の前に作った自動コミット
+    restored: list[str] = field(default_factory=list)  # 移動で書き出したパス
+    deleted: list[str] = field(default_factory=list)   # 移動で削除したパス
 
 
 @dataclass(slots=True)
 class GcReport:
-    # gc コマンドの結果。設計書 3.1節。
+    # gc の結果。dry_run では「削除する予定のもの」を入れる。仕様書 3.9節、設計書 4.8節。
 
-    deleted_commits: list[int] = field(default_factory=list)  # 削除した版番号
-    deleted_manifests: int = 0                                 # 削除したマニフェスト数
-    deleted_chunks: int = 0                                    # 削除したチャンク数
-    cleaned_tmp: int = 0                                       # 削除した tmp の残骸数
-    freed_bytes: int = 0                                       # 解放したバイト数
-
-
-@dataclass(slots=True)
-class VerifyReport:
-    # verify コマンドの結果。設計書 3.1節。
-
-    store: StoreVerifyResult = field(default_factory=StoreVerifyResult)
-    bad_commits: list[int] = field(default_factory=list)       # 破損した版番号
-    repaired_chunks: int = 0                                   # 修復したチャンク数
-    repaired_bytes: int = 0                                    # 修復したバイト数
+    changed: bool                                             # 何か削除したか(dry_run では False)
+    dry_run: bool
+    deleted_commits: list[int] = field(default_factory=list)  # 版番号
+    deleted_manifests: int = 0
+    deleted_chunks: int = 0
+    deleted_tmp: int = 0                                      # tmp/ の残骸
+    freed_bytes: int = 0                                      # 削除したファイルの合計サイズ
+    skipped: list[str] = field(default_factory=list)          # 安全のため見送った削除("manifests", "chunks")

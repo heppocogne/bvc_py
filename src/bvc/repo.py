@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from . import fsutil
 from .chunkers import make_chunker
 from .codecs import POLICIES
-from .errors import BrokenVersion, BvcError, CannotMove, MissingFiles, RevisionError, UsageError
+from .errors import (
+    BrokenVersion,
+    BvcError,
+    CannotMove,
+    CorruptData,
+    FileBusy,
+    MissingFiles,
+    PinnedCommit,
+    RevisionError,
+    UsageError,
+)
 from .fsutil import FileLock, atomic_write_json, compile_glob, load_json
-from .history import History
+from .history import History, check_branch_name
 from .model import (
     BranchInfo,
+    Commit,
     CommitResult,
     Config,
     DiscardResult,
@@ -22,7 +35,7 @@ from .model import (
     LogEntry,
     MoveResult,
     Note,
-    VerifyReport,
+    ProgressEvent,
     WorkState,
 )
 from .store import ObjectStore, ProgressFn
@@ -55,6 +68,27 @@ def _no_skip_broken(skip_broken: bool) -> None:
 
 def _head_json(head: Head) -> dict:
     return {"at": head.at, "branch": head.branch}
+
+
+def _op_entry(op: str, args: dict, head: Head) -> dict:
+    # 現在位置を変えない操作の oplog の記録。
+    return {"op": op, "args": args, "reason": "", "before": _head_json(head),
+            "after": _head_json(head), "created": [], "result": "ok"}
+
+
+def _check_name(name: str) -> str:
+    # ブランチ名の誤りは引数の誤り(終了コード 2)にする。
+    try:
+        return check_branch_name(name)
+    except RevisionError as e:
+        raise UsageError(str(e)) from None
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return os.lstat(fsutil.os_path(path)).st_size
+    except FileNotFoundError:
+        return 0
 
 
 def parse_config(data: dict) -> Config:
@@ -393,9 +427,11 @@ class Repo:
         allow_missing: bool,
         progress: ProgressFn | None,
         args: dict | None = None,
+        on_done: Callable[[], None] | None = None,
     ) -> MoveResult:
         # 移動系の共通手順(設計書 4.1節)。移動先は呼び出し側が自動コミットの前に決めておく。
         # branch が None なら、移動後もそのときの HEAD.branch(自動コミットがあればそのブランチ)を保つ。
+        # on_done は復元が成功した後、oplog の前に呼び出す(discard の削除印など)。
         h, wt = self._history, self._worktree
         head = h.head()
         self._check_movable(target_id)
@@ -446,6 +482,8 @@ class Repo:
                 except Exception:
                     logger.warning("操作ログに記録できませんでした", exc_info=True)
             raise
+        if on_done is not None:
+            on_done()
         h.log_op({**entry, "after": _head_json(after), "result": "ok"})
         return MoveResult(
             changed=True,
@@ -487,216 +525,246 @@ class Repo:
             entries = entries[:limit]
         return entries
 
-    # --- M4-A: 履歴操作 ---
+    # --- 履歴操作(M4-1〜M4-4) ---
+
+    def get_commit(self, commit_id: int) -> Commit | None:
+        # 版の内容(表示用)。読み込み不可の版は None。
+        h = self._history
+        if not h.exists(commit_id):
+            raise RevisionError(f"版 {commit_id} は存在しません")
+        return h.get(commit_id) if h.is_readable(commit_id) else None
 
     def note(self, text: str, rev: str = "@") -> Note:
-        # コメントを追記する(M4-1)。書き込みはhistory が原子的に行う。
-        commit_id = self.resolve(rev)
-        if not self._history.is_readable(commit_id):
-            raise RevisionError(f"版 {commit_id} は読み込めません")
-        return self._history.add_note(commit_id, text)
+        # 版にコメントを追記する(M4-1、仕様書 3.6節)。読み込み不可・壊れた版にも付けられる。
+        if type(text) is not str or not text:
+            raise UsageError("コメントの本文が空です")
+        h = self._history
+        head = h.head()
+        commit_id = h.resolve(rev, head)
+        note = h.add_note(commit_id, text)
+        h.log_op(_op_entry("note", {"rev": rev, "id": commit_id}, head))
+        return note
 
     def branches(self) -> list[BranchInfo]:
-        # ブランチ一覧を返す(M4-2)。
+        # ブランチの一覧(M4-2、仕様書 3.7節)。生きている版のあるブランチ、名前の付いたブランチ、現在のブランチ。
         h = self._history
-        # 生きているすべてのブランチを集める
-        branches_set = set()
-        for c in h.living():
-            branches_set.add(c.branch)
-        # tip から parent_tip を計算する
-        result = []
-        for branch_num in sorted(branches_set):
-            tip = h.branch_tip(branch_num)
-            if tip is not None:
-                parent_commit = h.get(tip)
-                parent_branch = parent_commit.branch if parent_commit else branch_num
-                # 分岐の起点(別ブランチからの分岐)を探す
-                parent_tip = None
-                if parent_branch != branch_num:
-                    parent_tip = h.branch_tip(parent_branch)
-                result.append(
-                    BranchInfo(
-                        number=branch_num,
-                        name=h.branch_name(branch_num),
-                        tip=tip,
-                        parent_tip=parent_tip,
-                    )
-                )
-        return result
+        head = h.head()
+        numbers = {c.branch for c in h.living()} | set(h.branch_names()) | {head.branch}
+        return [self._branch_info(b, head) for b in sorted(numbers)]
 
-    def name_branch(self, name: str, rev: str = "@") -> BranchInfo:
-        # ブランチに名前を付ける(M4-2)。
-        commit_id = self.resolve(rev)
-        c = self._history.get(commit_id)
-        branch_num = c.branch
-        self._history.name_branch(branch_num, name)
-        # 結果を返す
-        tip = self._history.branch_tip(branch_num)
-        assert tip is not None
+    def _branch_info(self, branch: int, head: Head) -> BranchInfo:
+        # 分岐元: 先端からつなぎ直し後の親をたどり、別のブランチ(または読み込み不可の版)に出た所。
+        h = self._history
+        tip = h.branch_tip(branch)
+        fork = None
+        cur = tip
+        while cur is not None:
+            p = h.effective_parent(cur)
+            if p is None or not h.is_readable(p) or h.get(p).branch != branch:
+                fork = p
+                break
+            cur = p
         return BranchInfo(
-            number=branch_num,
-            name=name,
-            tip=tip,
-            parent_tip=None,
+            number=branch, name=h.branch_name(branch), tip=tip, fork=fork, is_current=branch == head.branch
         )
 
-    def unname_branch(self, name: str) -> None:
-        # ブランチ名を削除する(M4-2)。
-        self._history.unname_branch(name)
+    def name_branch(self, name: str, rev: str = "@") -> BranchInfo:
+        # rev が属するブランチに名前を付ける(M4-2)。同じ名前が別のブランチにあれば付け替える。
+        _check_name(name)
+        h = self._history
+        head = h.head()
+        commit_id = h.resolve(rev, head)
+        if not h.is_readable(commit_id):
+            raise BvcError(f"版 {commit_id} は読み込めないため、属するブランチが分かりません")
+        branch = h.get(commit_id).branch
+        previous = h.name_branch(branch, name)
+        if previous is not None:
+            tip = h.branch_tip(previous)
+            logger.info("名前 '%s' を別のブランチ(先端 %s)から付け替えました", name, "なし" if tip is None else tip)
+        h.log_op(_op_entry("branch_name", {"name": name, "rev": rev, "branch": branch, "previous": previous}, head))
+        return self._branch_info(branch, head)
+
+    def unname_branch(self, name: str) -> BranchInfo:
+        # 名前を外す(M4-2)。名前を外したブランチの情報を返す。
+        _check_name(name)
+        h = self._history
+        head = h.head()
+        branch = h.unname_branch(name)
+        h.log_op(_op_entry("branch_unname", {"name": name, "branch": branch}, head))
+        return self._branch_info(branch, head)
 
     def discard(
-        self, rev: str = "@", force: bool = False, allow_missing: bool = False
+        self,
+        rev: str = "@",
+        force: bool = False,
+        allow_missing: bool = False,
+        progress: ProgressFn | None = None,
     ) -> DiscardResult:
-        # 版に削除印を付ける(M4-3、設計書 4.11節)。
-        # 現在位置なら自動コミット → 親へ復元する。
-        with self._lock:
-            h = self._history
-            head = h.head()
-            commit_id = self.resolve(rev)
-            if h.is_discarded(commit_id):
-                raise RevisionError(f"版 {commit_id} は既に削除済みです")
+        # 版に削除印を付ける(M4-3、仕様書 3.8節)。データは gc まで残る。子は親につなぎ直される。
+        # 現在位置なら、親へ移動してから削除印を付ける。未コミットの変更は自動コミット(消す版の子)に残る。
+        # 削除印は復元が成功した後に書く。途中で失敗・中断しても「移動も削除もしていない」か
+        # 「移動だけした」状態で終わり、HEAD が削除済みの版を指すことはない。
+        h = self._history
+        head = h.head()
+        commit_id = h.resolve(rev, head)
+        if h.is_discarded(commit_id):
+            raise RevisionError(f"版 {commit_id} は削除済みです")
+        if commit_id in h.pinned_ids() and not force:
+            raise PinnedCommit(
+                f"版 {commit_id} は git のコミットから参照されています。削除するには --force を指定してください",
+                commit=commit_id,
+            )
+        args = {"rev": rev, "id": commit_id, "force": force}
+        if commit_id != head.at:
+            h.discard(commit_id)
+            h.log_op(_op_entry("discard", {**args, "allow_missing": allow_missing}, head))
+            return DiscardResult(changed=True, discarded=commit_id, before=head, after=head)
 
-            # 削除対象が現在位置なら、親へ移動する
-            if commit_id == head.at:
-                parent = h.effective_parent(commit_id)
-                if parent is None:
-                    raise CannotMove(
-                        "現在位置を削除できません(親がない版のため)",
-                        details={"at": commit_id},
-                    )
-                # 親への移動時に自動コミット + 復元 を行う
-                h.discard(commit_id)
-                move_result = self._move_to_target(
-                    target_id=parent,
-                    op="discard",
-                    arg=str(commit_id),
-                    reason="",
-                    allow_missing=allow_missing,
-                )
-                return DiscardResult(
-                    changed=True,
-                    before=move_result.before,
-                    after=move_result.after,
-                    auto_commit=move_result.auto_commit,
-                    restored=move_result.restored,
-                    deleted=move_result.deleted,
-                )
-            else:
-                # 削除対象が現在位置でなければ、単に削除印を付けるだけ
-                h.discard(commit_id)
-                h.log_op({"op": "discard", "args": {"rev": rev}, "before": _head_json(head)})
-                return DiscardResult(
-                    changed=True,
-                    before=head,
-                    after=head,
-                    auto_commit=None,
-                    restored=[],
-                    deleted=[],
-                )
+        parent = h.effective_parent(commit_id)
+        if parent is None:
+            raise CannotMove(
+                f"版 {commit_id} は根(親の無い版)なので、現在位置のまま削除できません。別の版へ移動してから削除してください",
+                at=commit_id,
+            )
+        res = self._move(
+            "discard", "" if rev == "@" else rev, "", parent, None, allow_missing, progress, args,
+            on_done=lambda: h.discard(commit_id),
+        )
+        return DiscardResult(
+            changed=True,
+            discarded=commit_id,
+            before=res.before,
+            after=res.after,
+            auto_commit=res.auto_commit,
+            restored=res.restored,
+            deleted=res.deleted,
+        )
 
-    def gc(self, dry_run: bool = False, no_git: bool = False, progress: ProgressFn = None) -> GcReport:
-        # ガベージコレクション(M4-4、設計書 4.8節)。
-        # mark: 生きている版 ∪ pin された版 → マニフェスト → チャンク
-        # sweep: mark 外を削除
-        with self._lock:
-            h = self._history
-            s = self._store
+    def gc(self, dry_run: bool = False, no_git: bool = False, progress: ProgressFn | None = None) -> GcReport:
+        # 削除済みの版と、参照されないマニフェスト・チャンク・一時ファイルを消す(M4-4、設計書 4.8節)。
+        # git 連携(M6)が無い間は、no_git に関係なく git の履歴は調べない。
+        # 削除順は 版 → マニフェスト → チャンク → 一時ファイル。途中で止まっても、残るのは参照されないものだけ(R-8)。
+        # 参照先を把握できない版・マニフェストがあれば、その先の削除は見送る(D-15)。
+        h, s = self._history, self._store
+        head = h.head()
+        pinned = h.pinned_ids()
+        ids = h.ids(include_discarded=True)
+        garbage = [c for c in ids if h.is_discarded(c) and c not in pinned and c != head.at]
+        kept = [c for c in ids if c not in set(garbage)]
 
-            # mark フェーズ: 保護するマニフェストの集合を計算する
-            marked_manifests: set[str] = set()
-            marked_commits: set[int] = set()
+        # mark
+        unknown = [c for c in kept if not h.tree_known(c)]
+        manifests: set[str] = set()
+        for c in kept:
+            if h.tree_known(c):
+                manifests.update(h.get(c).tree.values())
+        chunks: set[str] = set()
+        unreadable = []
+        for sha in sorted(manifests):
+            try:
+                m = s.get_manifest(sha)
+            except CorruptData:
+                unreadable.append(sha)
+                continue
+            except OSError as e:
+                raise FileBusy(f"マニフェストを読めません({e}): {sha}", sha=sha) from e
+            chunks.update(ref.sha for ref in m.chunks)
+        skipped = []
+        if unknown:
+            skipped = ["manifests", "chunks"]
+            logger.warning(
+                "版 %s は読み込めない(または不正な記録を含む)ため、参照するデータが分かりません。"
+                "安全のため、マニフェストとチャンクは削除しません(その版を discard すると削除できます)",
+                ", ".join(map(str, sorted(unknown))),
+            )
+        elif unreadable:
+            skipped = ["chunks"]
+            logger.warning(
+                "生きている版が参照するマニフェスト %d 件を読めないため、参照するチャンクが分かりません。"
+                "安全のため、チャンクは削除しません",
+                len(unreadable),
+            )
 
-            # 1. 生きている版
-            for c in h.living():
-                marked_commits.add(c.id)
-                marked_manifests.update(c.tree.values())
+        # 削除の対象
+        known = set(ids)
+        orphan_notes = [h.commit_paths(c)[1] for c in h.note_ids() if c not in known]
+        del_manifests = [] if "manifests" in skipped else [m for m in s.iter_manifests() if m not in manifests]
+        del_chunks = [] if "chunks" in skipped else [c for c in s.iter_chunks() if c not in chunks]
+        tmp_files = self._tmp_files()
+        freed = (
+            sum(_file_size(p) for c in garbage for p in h.commit_paths(c))
+            + sum(_file_size(p) for p in orphan_notes)
+            + sum(_file_size(s.manifest_path(m)) for m in del_manifests)
+            + sum(_file_size(s.chunk_path(c)) for c in del_chunks)
+            + sum(_file_size(p) for p in tmp_files)
+        )
+        report = GcReport(
+            changed=False,
+            dry_run=dry_run,
+            deleted_commits=sorted(garbage),
+            deleted_manifests=len(del_manifests),
+            deleted_chunks=len(del_chunks),
+            deleted_tmp=len(tmp_files),
+            freed_bytes=freed,
+            skipped=skipped,
+        )
+        total = len(garbage) + len(orphan_notes) + len(del_manifests) + len(del_chunks) + len(tmp_files)
+        if dry_run or total == 0:
+            return report
 
-            # 2. pin された版(M6以降。これは簡略版)
-            # TODO: pinned_ids() から tree を取得する
+        # sweep
+        done = 0
 
-            # 3. git の全履歴から参照される版(M6)
-            # TODO: gitlink が実装されたら git rev-list を呼ぶ
+        def step() -> None:
+            nonlocal done
+            done += 1
+            if progress is not None:
+                progress(ProgressEvent("gc", done, total))
 
-            # マニフェストからチャンク を計算する
-            marked_chunks: set[str] = set()
-            for manifest_sha in marked_manifests:
+        try:
+            for c in sorted(garbage):
+                fsutil.fault("gc:commit")
+                for p in h.commit_paths(c):
+                    fsutil.remove_quietly(p)
+                s.health.clear("bad_commits", str(c))
+                step()
+            for p in orphan_notes:
+                fsutil.fault("gc:note")
+                fsutil.remove_quietly(p)
+                step()
+            for m in del_manifests:
+                fsutil.fault("gc:manifest")
+                s.delete_manifest(m)
+                step()
+            for c in del_chunks:
+                fsutil.fault("gc:chunk")
+                s.delete_chunk(c)
+                step()
+            for p in tmp_files:
+                fsutil.fault("gc:tmp")
                 try:
-                    m = s.get_manifest(manifest_sha)
-                    for ref in m.chunks:
-                        marked_chunks.add(ref.sha)
-                except Exception:
-                    # 壊れたマニフェスト は無視(隔離されている可能性)
-                    pass
+                    fsutil.remove_quietly(p)
+                except OSError as e:
+                    logger.warning("一時ファイルを削除できませんでした(%s): %s", e, p.name)
+                step()
+        finally:
+            # 版ファイルを消したので、履歴を読み直す
+            self._history = History(self.bvc_dir)
+            self._history.load()
+        report.changed = True
+        self._history.log_op(
+            {**_op_entry("gc", {"no_git": no_git}, head),
+             "deleted": {"commits": report.deleted_commits, "manifests": report.deleted_manifests,
+                         "chunks": report.deleted_chunks, "tmp": report.deleted_tmp},
+             "skipped": skipped}
+        )
+        return report
 
-            # sweep フェーズ: mark 外を削除
-            if not dry_run:
-                # 版を削除
-                deleted_commits = []
-                for cid in h.ids(include_discarded=True):
-                    if cid not in marked_commits:
-                        commit_file = h._bvc_dir / "commits" / f"{cid}.json"
-                        if commit_file.exists():
-                            commit_file.unlink()
-                            deleted_commits.append(cid)
-                            # notes も削除
-                            notes_file = h._bvc_dir / "notes" / f"{cid}.jsonl"
-                            if notes_file.exists():
-                                notes_file.unlink()
-
-                # マニフェストを削除
-                deleted_manifests = 0
-                for m_sha in s.iter_manifests():
-                    if m_sha not in marked_manifests:
-                        s.delete_manifest(m_sha)
-                        deleted_manifests += 1
-
-                # チャンク を削除
-                deleted_chunks = 0
-                for c_sha in s.iter_chunks():
-                    if c_sha not in marked_chunks:
-                        s.delete_chunk(c_sha)
-                        deleted_chunks += 1
-
-                # tmp の掃除
-                tmp_dir = h._bvc_dir / "tmp"
-                cleaned_tmp = 0
-                if tmp_dir.exists():
-                    for p in tmp_dir.glob("*"):
-                        try:
-                            p.unlink()
-                            cleaned_tmp += 1
-                        except Exception:
-                            pass
-
-                # freed_bytes は実装簡略版（実装が必要に応じて計算可能）
-                freed_bytes = 0
-
-                h.log_op({
-                    "op": "gc",
-                    "args": {"dry_run": False, "no_git": no_git},
-                    "deleted_commits": deleted_commits,
-                    "deleted_manifests": deleted_manifests,
-                    "deleted_chunks": deleted_chunks,
-                })
-
-                return GcReport(
-                    deleted_commits=deleted_commits,
-                    deleted_manifests=deleted_manifests,
-                    deleted_chunks=deleted_chunks,
-                    cleaned_tmp=cleaned_tmp,
-                    freed_bytes=freed_bytes,
-                )
-            else:
-                # dry_run: 削除するもの の数を計算するだけ
-                to_delete_commits = [
-                    cid for cid in h.ids(include_discarded=True) if cid not in marked_commits
-                ]
-                to_delete_manifests = sum(1 for m_sha in s.iter_manifests() if m_sha not in marked_manifests)
-                to_delete_chunks = sum(1 for c_sha in s.iter_chunks() if c_sha not in marked_chunks)
-                return GcReport(
-                    deleted_commits=to_delete_commits,
-                    deleted_manifests=to_delete_manifests,
-                    deleted_chunks=to_delete_chunks,
-                    cleaned_tmp=0,
-                    freed_bytes=0,
-                )
+    def _tmp_files(self) -> list[Path]:
+        # tmp/ の残骸(ロック中なので、書き込み途中のものは無い)。
+        tmp = self.bvc_dir / "tmp"
+        try:
+            with os.scandir(fsutil.os_path(tmp)) as it:
+                return sorted(tmp / e.name for e in it if e.is_file(follow_symlinks=False))
+        except FileNotFoundError:
+            return []

@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import sys
+import unicodedata
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any, Final
 
 from . import __version__
 from .errors import BvcError, SafetyAbort
-from .model import CommitResult, LogEntry, MoveResult, WorkState
+from .model import BranchInfo, Commit, CommitResult, DiscardResult, GcReport, LogEntry, MoveResult, WorkState
 from .repo import Repo
 
 # 成功
@@ -138,28 +139,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)")
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
-    # M4-A: 履歴操作
     p = sub.add_parser("note", help="版にコメントを追記する")
-    p.add_argument("-m", "--message", required=True, metavar="<text>", dest="text", help="コメント本文")
-    p.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    p.add_argument("-m", "--message", dest="text", required=True, metavar="<本文>", help="コメントの本文")
+    p.add_argument("-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
 
-    p = sub.add_parser("branch", help="ブランチを操作する")
-    branch_sub = p.add_subparsers(dest="branch_command", metavar="<サブコマンド>", title="ブランチサブコマンド")
-    bp = branch_sub.add_parser("list", help="ブランチ一覧を表示")
-    bp = branch_sub.add_parser("name", help="ブランチに名前を付ける")
+    p = sub.add_parser("branch", help="ブランチの一覧・名前の付け外し")
+    bsub = p.add_subparsers(dest="branch_command", metavar="<操作>", title="操作(省略時は一覧)")
+    bp = bsub.add_parser("name", help="版が属するブランチに名前を付ける(既存の名前は付け替える)")
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
-    bp.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
-    bp = branch_sub.add_parser("unname", help="ブランチ名を削除する")
+    bp.add_argument("rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    bp = bsub.add_parser("unname", help="名前を外す")
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
 
-    p = sub.add_parser("discard", help="版に削除印を付ける")
-    p.add_argument("-r", "--rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
-    p.add_argument("--force", action="store_true", help="確認を省略する(未実装)")
+    p = sub.add_parser("discard", help="版に削除の印を付ける(データは gc まで残る)")
+    p.add_argument("rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    p.add_argument("--force", action="store_true", help="git のコミットが参照している版でも削除する")
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
-    p = sub.add_parser("gc", help="不要なデータを削除する")
-    p.add_argument("--dry-run", action="store_true", help="実行せず予測結果だけを表示する")
-    p.add_argument("--no-git", action="store_true", help="git の履歴を保護対象に含めない")
+    p = sub.add_parser("gc", help="削除済みの版と不要なデータを消す")
+    p.add_argument("--dry-run", action="store_true", help="削除対象と容量を表示するだけで、何も削除しない")
+    p.add_argument("--no-git", action="store_true", help="git の履歴による保護を省く")
 
     return parser
 
@@ -328,85 +327,57 @@ def _cmd_move(args: argparse.Namespace, start: Path) -> int:
 
 
 def _cmd_note(args: argparse.Namespace, start: Path) -> int:
-    # M4-1: コメントを追記する。
     with Repo.open(start) as repo:
         note = repo.note(args.text, rev=args.rev)
+        commit = repo.get_commit(note.commit_id)
     if args.json:
-        _print_json({"changed": True, "note": {"commit_id": note.commit_id, "time": note.time, "text": note.text}})
+        _print_json({"changed": True, "note": asdict(note)})
     else:
-        logger.info("版 %d にコメントを追記しました", note.commit_id)
+        logger.info("版 %d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit))
     return EXIT_OK
 
 
 def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
-    # M4-2: ブランチを操作する。
     with Repo.open(start) as repo:
-        if args.branch_command == "list" or args.branch_command is None:
+        if args.branch_command is None:
             branches = repo.branches()
-            if args.json:
-                _print_json(
-                    {
-                        "changed": False,
-                        "branches": [asdict(b) for b in branches],
-                    }
-                )
-            else:
-                if not branches:
-                    logger.info("ブランチがありません")
-                else:
-                    for b in branches:
-                        name_part = f" [{b.name}]" if b.name else ""
-                        logger.info("ブランチ %d%s: 先端 %d", b.number, name_part, b.tip)
         elif args.branch_command == "name":
-            result = repo.name_branch(args.name, rev=args.rev)
-            if args.json:
-                _print_json({"changed": True, "branch": asdict(result)})
-            else:
-                logger.info("ブランチ %d に名前 '%s' を付けました", result.number, result.name)
-        elif args.branch_command == "unname":
-            repo.unname_branch(args.name)
-            if args.json:
-                _print_json({"changed": True})
-            else:
-                logger.info("ブランチ名 '%s' を削除しました", args.name)
+            info = repo.name_branch(args.name, rev=args.rev)
+        else:
+            info = repo.unname_branch(args.name)
+    if args.branch_command is None:
+        if args.json:
+            _print_json({"changed": False, "branches": [asdict(b) for b in branches]})
+        else:
+            print(format_branches(branches))
+        return EXIT_OK
+    if args.json:
+        _print_json({"changed": True, "branch": asdict(info)})
+    elif args.branch_command == "name":
+        logger.info("ブランチ(先端 %s)に名前 '%s' を付けました", _or_none(info.tip), args.name)
+    else:
+        logger.info("ブランチ(先端 %s)から名前 '%s' を外しました", _or_none(info.tip), args.name)
     return EXIT_OK
 
 
 def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
-    # M4-3: 削除印を付ける。
     with Repo.open(start) as repo:
-        result = repo.discard(rev=args.rev, allow_missing=args.allow_missing)
+        result = repo.discard(rev=args.rev, force=args.force, allow_missing=args.allow_missing)
     if args.json:
         _print_json(result)
         return EXIT_OK
-    if not result.changed:
-        logger.info("変更なし")
-    elif result.restored:
-        logger.info("版 %d に削除印を付けました(親の版 %d に移動)", result.before.at, result.after.at)
-        for line in _change_lines(WorkState(tree={}, modified=[], added=[], renamed=[], missing=result.deleted), deleted_label="deleted"):
-            logger.info("  %s", line)
-    else:
-        logger.info("版 %d に削除印を付けました", result.before.at)
+    for line in format_discard(result):
+        logger.info("%s", line)
     return EXIT_OK
 
 
 def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
-    # M4-4: ガベージコレクション。
     with Repo.open(start) as repo:
         result = repo.gc(dry_run=args.dry_run, no_git=args.no_git)
     if args.json:
         _print_json(result)
         return EXIT_OK
-    if not result.deleted_commits and not result.deleted_manifests and not result.deleted_chunks:
-        logger.info("削除対象がありません")
-    else:
-        logger.info(
-            "削除しました: 版 %d、マニフェスト %d、チャンク %d、%s",
-            len(result.deleted_commits),
-            result.deleted_manifests,
-            result.deleted_chunks,
-            format_size(result.freed_bytes),
-        )
+    logger.info("%s", format_gc(result))
     return EXIT_OK
 
 
@@ -426,6 +397,55 @@ def format_move(r: MoveResult) -> list[str]:
     lines += [f"  restored: {p}" for p in r.restored]
     lines += [f"  deleted:  {p}" for p in r.deleted]
     return lines
+
+
+def _or_none(v: int | None) -> str:
+    return "なし" if v is None else str(v)
+
+
+def _commit_label(c: Commit | None) -> str:
+    if c is None:
+        return "読み込み不可"
+    return c.message or c.kind
+
+
+def _width(s: str) -> int:
+    # 端末での表示幅(全角は2)。
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in s)
+
+
+def format_branches(branches: list[BranchInfo]) -> str:
+    # 仕様書 3.7節。現在のブランチに '*' を付ける。内部のブランチ番号は表示しない。
+    names = [b.name or "(名前なし)" for b in branches]
+    w = max((_width(n) for n in names), default=0)
+    lines = []
+    for b, n in zip(branches, names):
+        mark = "*" if b.is_current else " "
+        lines.append(f"{mark} {n}{' ' * (w - _width(n))}  先端 {_or_none(b.tip)}  分岐元 {_or_none(b.fork)}")
+    return "\n".join(lines)
+
+
+def format_discard(r: DiscardResult) -> list[str]:
+    lines = [f"版 {r.discarded} に削除の印を付けました"]
+    if r.after.at != r.before.at:
+        lines.append(f"  版 {r.after.at} に移動しました")
+        if r.auto_commit is not None:
+            lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
+        lines += [f"  restored: {p}" for p in r.restored]
+        lines += [f"  deleted:  {p}" for p in r.deleted]
+    return lines
+
+
+def format_gc(r: GcReport) -> str:
+    total = len(r.deleted_commits) + r.deleted_manifests + r.deleted_chunks + r.deleted_tmp
+    if total == 0:
+        return "削除対象がありません"
+    versions = ", ".join(map(str, r.deleted_commits)) or "なし"
+    detail = (
+        f"版 {versions}、マニフェスト {r.deleted_manifests}、チャンク {r.deleted_chunks}、"
+        f"一時ファイル {r.deleted_tmp}(合計 {format_size(r.freed_bytes)})"
+    )
+    return f"削除対象: {detail}" if r.dry_run else f"削除しました: {detail}"
 
 
 def format_size(n: int) -> str:

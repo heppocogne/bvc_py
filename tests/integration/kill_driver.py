@@ -1,7 +1,7 @@
 # 強制終了テスト用のドライバ(実装計画書 6.3節、I-10)。
 #
 # 使い方: python kill_driver.py <作業フォルダ> <段階名の正規表現> <回数> <操作> [引数...]
-#   操作: commit [メッセージ] | undo | redo | goto <版> | open(開いて recover するだけ)
+#   操作: commit [メッセージ] | undo | redo | goto <版> | gc | open(開いて recover するだけ)
 #
 # 障害注入のフック(fsutil._fault_hook)と進捗で段階名を1行ずつ標準出力に書く。
 # 段階名が正規表現に一致した回数が <回数> に達したら "WAIT <段階名>" を書いて待機する。
@@ -53,6 +53,8 @@ def main(argv: list[str]) -> int:
             repo.redo(progress=progress)
         elif op == "goto":
             repo.goto(args[0], progress=progress)
+        elif op == "gc":
+            repo.gc(progress=progress)
         elif op != "open":
             raise SystemExit(f"不明な操作: {op}")
     print("DONE", flush=True)
