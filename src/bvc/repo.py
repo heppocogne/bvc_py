@@ -20,9 +20,10 @@ from .errors import (
     MissingFiles,
     PinnedCommit,
     RevisionError,
+    UnsafePath,
     UsageError,
 )
-from .fsutil import FileLock, atomic_write_json, compile_glob, load_json
+from .fsutil import FileLock, atomic_write_json, check_relpath, compile_glob, load_json
 from .history import History, check_branch_name
 from .model import (
     BranchInfo,
@@ -44,8 +45,17 @@ from .worktree import Worktree
 logger = logging.getLogger(__name__)
 
 BVC_DIR: Final[str] = ".bvc"
+# {"name": "fixed", "size": "4M"}のような書き方も許容するため、Anyを使う
 DEFAULT_CHUNKER: Final[dict[str, Any]] = {"name": "fixed", "size": 4194304}
-_SUBDIRS: Final[tuple[str, str, str, str, str, str, str]] = ("commits", "manifests", "chunks", "notes", "quarantine", "txn", "tmp")
+_SUBDIRS: Final[tuple[str, ...]] = (
+    "commits",
+    "manifests",
+    "chunks",
+    "notes",
+    "quarantine",
+    "txn",
+    "tmp",
+)
 
 
 def _config_error(msg: str) -> UsageError:
@@ -53,11 +63,17 @@ def _config_error(msg: str) -> UsageError:
 
 
 def _missing_error(state: WorkState) -> MissingFiles:
+    # 表示の形式は仕様書 2.6節
+    lines = ["追跡ファイルが見つかりません"]
+    for p in state.missing:
+        lines.append(f"  missing: {p}")
+        if state.hints.get(p):
+            lines.append(
+                f"  ヒント: パターン外に同じ内容のファイルがあります: {', '.join(state.hints[p])}"
+            )
+    lines.append("  削除として記録するには --allow-missing を指定してください")
     return MissingFiles(
-        "追跡ファイルが見つかりません\n"
-        + "".join(f"  missing: {p}\n" for p in state.missing)
-        + "  削除として記録するには --allow-missing を指定してください",
-        missing=list(state.missing),
+        "\n".join(lines), missing=list(state.missing), hints=dict(state.hints)
     )
 
 
@@ -72,8 +88,15 @@ def _head_json(head: Head) -> dict:
 
 def _op_entry(op: str, args: dict, head: Head) -> dict:
     # 現在位置を変えない操作の oplog の記録。
-    return {"op": op, "args": args, "reason": "", "before": _head_json(head),
-            "after": _head_json(head), "created": [], "result": "ok"}
+    return {
+        "op": op,
+        "args": args,
+        "reason": "",
+        "before": _head_json(head),
+        "after": _head_json(head),
+        "created": [],
+        "result": "ok",
+    }
 
 
 def _check_name(name: str) -> str:
@@ -94,7 +117,11 @@ def _file_size(path: Path) -> int:
 def parse_config(data: dict) -> Config:
     # config.json の内容を検査して Config にする(M2-2)。不正な指定は設定エラー(I-17)。
     track = data.get("track")
-    if not isinstance(track, list) or not track or not all(type(p) is str and p for p in track):
+    if (
+        not isinstance(track, list)
+        or not track
+        or not all(type(p) is str and p for p in track)
+    ):
         raise _config_error("track は空でない文字列のリストにしてください")
     ignore = data.get("ignore", [])
     if not isinstance(ignore, list) or not all(type(p) is str and p for p in ignore):
@@ -111,7 +138,9 @@ def parse_config(data: dict) -> Config:
 
     def check_compression(c: Any, where: str) -> str:
         if c not in POLICIES:
-            raise _config_error(f"{where} は {', '.join(POLICIES)} のいずれかにしてください: {c!r}")
+            raise _config_error(
+                f"{where} は {', '.join(POLICIES)} のいずれかにしてください: {c!r}"
+            )
         return c
 
     chunker = check_chunker(data.get("chunker", DEFAULT_CHUNKER), "chunker")
@@ -122,7 +151,11 @@ def parse_config(data: dict) -> Config:
         raise _config_error("rules はリストにしてください")
     for i, r in enumerate(rules):
         where = f"rules[{i}]"
-        if not isinstance(r, dict) or type(r.get("pattern")) is not str or not r["pattern"]:
+        if (
+            not isinstance(r, dict)
+            or type(r.get("pattern")) is not str
+            or not r["pattern"]
+        ):
             raise _config_error(f"{where} には pattern(文字列)が必要です")
         if "chunker" in r:
             check_chunker(r["chunker"], f"{where}.chunker")
@@ -131,10 +164,15 @@ def parse_config(data: dict) -> Config:
 
     verify_chunks = data.get("verify_chunks", "exists")
     if verify_chunks not in ("exists", "full"):
-        raise _config_error(f"verify_chunks は exists か full にしてください: {verify_chunks!r}")
+        raise _config_error(
+            f"verify_chunks は exists か full にしてください: {verify_chunks!r}"
+        )
     threads = data.get("threads", 0)
     if type(threads) is not int or threads < 0:
         raise _config_error("threads は 0 以上の整数にしてください")
+    rename_threshold = data.get("rename_threshold", 0.5)
+    if type(rename_threshold) not in (int, float) or not 0 < rename_threshold <= 1:
+        raise _config_error("rename_threshold は 0 より大きく 1 以下の数にしてください")
 
     for p in track + ignore + [r["pattern"] for r in rules]:
         compile_glob(p)
@@ -145,6 +183,7 @@ def parse_config(data: dict) -> Config:
         chunker=chunker,
         compression=compression,
         verify_chunks=verify_chunks,
+        rename_threshold=float(rename_threshold),
         threads=threads,
     )
 
@@ -198,6 +237,7 @@ class Repo:
             "chunker": chunker or dict(DEFAULT_CHUNKER),
             "compression": compression,
             "verify_chunks": "exists",
+            "rename_threshold": 0.5,
             "threads": 0,
         }
         config = parse_config(config_data)
@@ -216,8 +256,14 @@ class Repo:
                 (bvc_dir / d).mkdir()
             tmp = bvc_dir / "tmp"
             atomic_write_json(bvc_dir / "config.json", config_data, tmp)
-            atomic_write_json(bvc_dir / "counters.json", {"format": 1, "next_commit": 0, "next_branch": 0}, tmp)
-            atomic_write_json(bvc_dir / "branches.json", {"format": 1, "names": {}}, tmp)
+            atomic_write_json(
+                bvc_dir / "counters.json",
+                {"format": 1, "next_commit": 0, "next_branch": 0},
+                tmp,
+            )
+            atomic_write_json(
+                bvc_dir / "branches.json", {"format": 1, "names": {}}, tmp
+            )
             atomic_write_json(
                 bvc_dir / "health.json",
                 {"format": 1, "bad_chunks": {}, "bad_manifests": {}, "bad_commits": {}},
@@ -227,7 +273,10 @@ class Repo:
             repo._history.load()
             state = repo._worktree.state(base_tree={}, store_chunks=True)
             if not state.tree:
-                logger.warning("追跡対象のファイルがありません(パターン: %s)", ", ".join(config.track))
+                logger.warning(
+                    "追跡対象のファイルがありません(パターン: %s)",
+                    ", ".join(config.track),
+                )
             commit = repo._history.new_commit(
                 parent=None,
                 tree=state.tree,
@@ -238,8 +287,14 @@ class Repo:
             repo._history.set_head(Head(at=commit.id, branch=commit.branch))
             repo._worktree.update_index(state.tree, state.fs_time_ns)
             repo._history.log_op(
-                {"op": "init", "args": {}, "before": None, "after": {"at": commit.id, "branch": commit.branch},
-                 "created": [commit.id], "result": "ok"}
+                {
+                    "op": "init",
+                    "args": {},
+                    "before": None,
+                    "after": {"at": commit.id, "branch": commit.branch},
+                    "created": [commit.id],
+                    "result": "ok",
+                }
             )
         except BaseException:
             if repo is not None:
@@ -254,7 +309,9 @@ class Repo:
         # start から上位へ .bvc を探して開く(M2-10)。ロック取得 → recover → History.load。
         workdir = cls.find_workdir(start)
         if workdir is None:
-            raise BvcError(f"リポジトリが見つかりません({Path(start).resolve()} とその上位に .bvc がありません)")
+            raise BvcError(
+                f"リポジトリが見つかりません({Path(start).resolve()} とその上位に .bvc がありません)"
+            )
         bvc_dir = workdir / BVC_DIR
         lock = FileLock(bvc_dir / "lock")
         lock.acquire()
@@ -289,7 +346,31 @@ class Repo:
     def work_state(self) -> WorkState:
         # 未コミットの変更を調べる(保存はしない)。
         head = self._history.head()
-        return self._worktree.state(base_tree=self._history.get(head.at).tree, store_chunks=False)
+        return self._worktree.state(
+            base_tree=self._history.get(head.at).tree, store_chunks=False
+        )
+
+    @staticmethod
+    def _normalize_renames(
+        renames: list[tuple[str, str]] | None,
+    ) -> list[tuple[str, str]]:
+        # 名前変更の手動指定を、記録と同じ形式('/' 区切り、NFC)の相対パスにする。
+        # 作業フォルダからの相対パスとして扱い、'\\' も区切りとみなす。
+        out = []
+        for pair in renames or ():
+            norm = []
+            for p in pair:
+                q = p.replace("\\", "/")
+                while q.startswith("./"):
+                    q = q[2:]
+                try:
+                    norm.append(check_relpath(q))
+                except UnsafePath as e:
+                    raise UsageError(
+                        f"--rename: 使えないパスです: {p}({e})", path=p
+                    ) from None
+            out.append((norm[0], norm[1]))
+        return out
 
     def commit(
         self,
@@ -301,13 +382,14 @@ class Repo:
     ) -> CommitResult:
         # 追跡ファイルの現状を新しい版として記録する(M2-10)。
         # 書き込み順: チャンク → マニフェスト → counters → 版 → HEAD → (bvc.lock: M6) → index → oplog(設計書 4.7節)。
+        renames = self._normalize_renames(renames)
         head = self._history.head()
         base = self._history.get(head.at)
         state = self._worktree.state(
             base_tree=base.tree,
             store_chunks=True,
-            renames=renames or [],
-            rename_threshold=self.config.rename_threshold,
+            renames=renames,
+            find_hints=not allow_missing,
         )
 
         if state.missing and not allow_missing:
@@ -331,11 +413,18 @@ class Repo:
         self._history.set_head(after)
         self._worktree.update_index(state.tree, state.fs_time_ns)
         self._history.log_op(
-            {"op": kind, "args": {"message": message, "allow_missing": allow_missing},
-             "before": _head_json(head), "after": _head_json(after),
-             "created": [commit.id], "result": "ok"}
+            {
+                "op": kind,
+                "args": {"message": message, "allow_missing": allow_missing},
+                "before": _head_json(head),
+                "after": _head_json(after),
+                "created": [commit.id],
+                "result": "ok",
+            }
         )
-        return CommitResult(changed=True, commit=commit, state=state, new_branch=new_branch)
+        return CommitResult(
+            changed=True, commit=commit, state=state, new_branch=new_branch
+        )
 
     # --- 移動系(M3-6, M3-7、設計書 4.1節・4.5節) ---
 
@@ -351,7 +440,9 @@ class Repo:
         head = self._history.head()
         target = self._history.effective_parent(head.at)
         if target is None:
-            raise CannotMove(f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at)
+            raise CannotMove(
+                f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at
+            )
         return self._move("undo", "", reason, target, None, allow_missing, progress)
 
     def redo(
@@ -369,11 +460,18 @@ class Repo:
         if head.at in path:
             idx = path.index(head.at)
             if idx == 0:
-                raise CannotMove(f"版 {head.at} はブランチの先端なので、これ以上進めません", at=head.at)
-            return self._move("redo", "", reason, path[idx - 1], head.branch, allow_missing, progress)
+                raise CannotMove(
+                    f"版 {head.at} はブランチの先端なので、これ以上進めません",
+                    at=head.at,
+                )
+            return self._move(
+                "redo", "", reason, path[idx - 1], head.branch, allow_missing, progress
+            )
         kids = h.children(head.at)
         if not kids:
-            raise CannotMove(f"版 {head.at} は先端(子の無い版)なので、これ以上進めません", at=head.at)
+            raise CannotMove(
+                f"版 {head.at} は先端(子の無い版)なので、これ以上進めません", at=head.at
+            )
         if len(kids) > 1:
             raise CannotMove(
                 f"版 {head.at} には子が複数あるため、進む先を決められません。"
@@ -382,7 +480,9 @@ class Repo:
                 candidates=kids,
             )
         self._check_movable(kids[0])
-        return self._move("redo", "", reason, kids[0], h.get(kids[0]).branch, allow_missing, progress)
+        return self._move(
+            "redo", "", reason, kids[0], h.get(kids[0]).branch, allow_missing, progress
+        )
 
     def goto(
         self, rev: str, allow_missing: bool = False, progress: ProgressFn | None = None
@@ -407,18 +507,29 @@ class Repo:
             after = Head(head.at, branch)
             h.set_head(after)
             h.log_op(
-                {"op": "goto", "args": {"rev": rev}, "reason": "", "before": _head_json(head),
-                 "after": _head_json(after), "created": [], "result": "ok"}
+                {
+                    "op": "goto",
+                    "args": {"rev": rev},
+                    "reason": "",
+                    "before": _head_json(head),
+                    "after": _head_json(after),
+                    "created": [],
+                    "result": "ok",
+                }
             )
             return MoveResult(changed=True, before=head, after=after)
-        return self._move("goto", rev, "", target, branch, allow_missing, progress, {"rev": rev})
+        return self._move(
+            "goto", rev, "", target, branch, allow_missing, progress, {"rev": rev}
+        )
 
     def _check_movable(self, target: int) -> None:
         # 移動先の版が読めて、tree に不正な値が無いか(マニフェスト・チャンクは restore の事前検査で確かめる)。
         if not self._history.exists(target):
             raise RevisionError(f"版 {target} は存在しません")
         if self._history.is_broken(target):
-            raise BrokenVersion(f"版 {target} は壊れているため移動できません", commit=target)
+            raise BrokenVersion(
+                f"版 {target} は壊れているため移動できません", commit=target
+            )
 
     def _move(
         self,
@@ -445,8 +556,17 @@ class Repo:
         files = wt.check_target(target.tree)
         paths = set(base.tree) | set(target.tree) | set(files)
         # 上書き・削除し得るパスは、stat キャッシュを使わずにハッシュする(仕様書 2.8節)
-        touched = {p for p in paths if base.tree.get(p) != target.tree.get(p) or p not in target.tree}
-        state = wt.state(base_tree=base.tree, store_chunks=True, no_cache=touched)
+        touched = {
+            p
+            for p in paths
+            if base.tree.get(p) != target.tree.get(p) or p not in target.tree
+        }
+        state = wt.state(
+            base_tree=base.tree,
+            store_chunks=True,
+            no_cache=touched,
+            find_hints=not allow_missing,
+        )
         if state.missing and not allow_missing:
             raise _missing_error(state)
 
@@ -481,7 +601,14 @@ class Repo:
             if auto is not None:
                 # 自動コミットで履歴は変わったので、中止したことも記録する
                 try:
-                    h.log_op({**entry, "after": _head_json(current), "result": "error", "error": str(e)})
+                    h.log_op(
+                        {
+                            **entry,
+                            "after": _head_json(current),
+                            "result": "error",
+                            "error": str(e),
+                        }
+                    )
                 except Exception:
                     logger.warning("操作ログに記録できませんでした", exc_info=True)
             raise
@@ -501,7 +628,9 @@ class Repo:
         # リビジョン式を版番号にする。
         return self._history.resolve(rev, self._history.head())
 
-    def log(self, include_discarded: bool = False, limit: int | None = None) -> list[LogEntry]:
+    def log(
+        self, include_discarded: bool = False, limit: int | None = None
+    ) -> list[LogEntry]:
         # 版を新しい順に返す(M2-10)。読めない版も含める(commit=None)。
         h = self._history
         head = h.head()
@@ -568,7 +697,11 @@ class Repo:
                 break
             cur = p
         return BranchInfo(
-            number=branch, name=h.branch_name(branch), tip=tip, fork=fork, is_current=branch == head.branch
+            number=branch,
+            name=h.branch_name(branch),
+            tip=tip,
+            fork=fork,
+            is_current=branch == head.branch,
         )
 
     def name_branch(self, name: str, rev: str = "@") -> BranchInfo:
@@ -578,13 +711,25 @@ class Repo:
         head = h.head()
         commit_id = h.resolve(rev, head)
         if not h.is_readable(commit_id):
-            raise BvcError(f"版 {commit_id} は読み込めないため、属するブランチが分かりません")
+            raise BvcError(
+                f"版 {commit_id} は読み込めないため、属するブランチが分かりません"
+            )
         branch = h.get(commit_id).branch
         previous = h.name_branch(branch, name)
         if previous is not None:
             tip = h.branch_tip(previous)
-            logger.info("名前 '%s' を別のブランチ(先端 %s)から付け替えました", name, "なし" if tip is None else tip)
-        h.log_op(_op_entry("branch_name", {"name": name, "rev": rev, "branch": branch, "previous": previous}, head))
+            logger.info(
+                "名前 '%s' を別のブランチ(先端 %s)から付け替えました",
+                name,
+                "なし" if tip is None else tip,
+            )
+        h.log_op(
+            _op_entry(
+                "branch_name",
+                {"name": name, "rev": rev, "branch": branch, "previous": previous},
+                head,
+            )
+        )
         return self._branch_info(branch, head)
 
     def unname_branch(self, name: str) -> BranchInfo:
@@ -620,8 +765,12 @@ class Repo:
         args = {"rev": rev, "id": commit_id, "force": force}
         if commit_id != head.at:
             h.discard(commit_id)
-            h.log_op(_op_entry("discard", {**args, "allow_missing": allow_missing}, head))
-            return DiscardResult(changed=True, discarded=commit_id, before=head, after=head)
+            h.log_op(
+                _op_entry("discard", {**args, "allow_missing": allow_missing}, head)
+            )
+            return DiscardResult(
+                changed=True, discarded=commit_id, before=head, after=head
+            )
 
         parent = h.effective_parent(commit_id)
         if parent is None:
@@ -630,7 +779,14 @@ class Repo:
                 at=commit_id,
             )
         res = self._move(
-            "discard", "" if rev == "@" else rev, "", parent, None, allow_missing, progress, args,
+            "discard",
+            "" if rev == "@" else rev,
+            "",
+            parent,
+            None,
+            allow_missing,
+            progress,
+            args,
             on_done=lambda: h.discard(commit_id),
         )
         return DiscardResult(
@@ -643,7 +799,12 @@ class Repo:
             deleted=res.deleted,
         )
 
-    def gc(self, dry_run: bool = False, no_git: bool = False, progress: ProgressFn | None = None) -> GcReport:
+    def gc(
+        self,
+        dry_run: bool = False,
+        no_git: bool = False,
+        progress: ProgressFn | None = None,
+    ) -> GcReport:
         # 削除済みの版と、参照されないマニフェスト・チャンク・一時ファイルを消す(M4-4、設計書 4.8節)。
         # git 連携(M6)が無い間は、no_git に関係なく git の履歴は調べない。
         # 削除順は 版 → マニフェスト → チャンク → 一時ファイル。途中で止まっても、残るのは参照されないものだけ(R-8)。
@@ -652,7 +813,9 @@ class Repo:
         head = h.head()
         pinned = h.pinned_ids()
         ids = h.ids(include_discarded=True)
-        garbage = [c for c in ids if h.is_discarded(c) and c not in pinned and c != head.at]
+        garbage = [
+            c for c in ids if h.is_discarded(c) and c not in pinned and c != head.at
+        ]
         kept = [c for c in ids if c not in set(garbage)]
 
         # mark
@@ -691,8 +854,16 @@ class Repo:
         # 削除の対象
         known = set(ids)
         orphan_notes = [h.commit_paths(c)[1] for c in h.note_ids() if c not in known]
-        del_manifests = [] if "manifests" in skipped else [m for m in s.iter_manifests() if m not in manifests]
-        del_chunks = [] if "chunks" in skipped else [c for c in s.iter_chunks() if c not in chunks]
+        del_manifests = (
+            []
+            if "manifests" in skipped
+            else [m for m in s.iter_manifests() if m not in manifests]
+        )
+        del_chunks = (
+            []
+            if "chunks" in skipped
+            else [c for c in s.iter_chunks() if c not in chunks]
+        )
         tmp_files = self._tmp_files()
         freed = (
             sum(_file_size(p) for c in garbage for p in h.commit_paths(c))
@@ -711,7 +882,13 @@ class Repo:
             freed_bytes=freed,
             skipped=skipped,
         )
-        total = len(garbage) + len(orphan_notes) + len(del_manifests) + len(del_chunks) + len(tmp_files)
+        total = (
+            len(garbage)
+            + len(orphan_notes)
+            + len(del_manifests)
+            + len(del_chunks)
+            + len(tmp_files)
+        )
         if dry_run or total == 0:
             return report
 
@@ -748,7 +925,9 @@ class Repo:
                 try:
                     fsutil.remove_quietly(p)
                 except OSError as e:
-                    logger.warning("一時ファイルを削除できませんでした(%s): %s", e, p.name)
+                    logger.warning(
+                        "一時ファイルを削除できませんでした(%s): %s", e, p.name
+                    )
                 step()
         finally:
             # 版ファイルを消したので、履歴を読み直す
@@ -756,10 +935,16 @@ class Repo:
             self._history.load()
         report.changed = True
         self._history.log_op(
-            {**_op_entry("gc", {"no_git": no_git}, head),
-             "deleted": {"commits": report.deleted_commits, "manifests": report.deleted_manifests,
-                         "chunks": report.deleted_chunks, "tmp": report.deleted_tmp},
-             "skipped": skipped}
+            {
+                **_op_entry("gc", {"no_git": no_git}, head),
+                "deleted": {
+                    "commits": report.deleted_commits,
+                    "manifests": report.deleted_manifests,
+                    "chunks": report.deleted_chunks,
+                    "tmp": report.deleted_tmp,
+                },
+                "skipped": skipped,
+            }
         )
         return report
 
@@ -768,6 +953,8 @@ class Repo:
         tmp = self.bvc_dir / "tmp"
         try:
             with os.scandir(fsutil.os_path(tmp)) as it:
-                return sorted(tmp / e.name for e in it if e.is_file(follow_symlinks=False))
+                return sorted(
+                    tmp / e.name for e in it if e.is_file(follow_symlinks=False)
+                )
         except FileNotFoundError:
             return []

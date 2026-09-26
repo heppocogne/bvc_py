@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Final
 
 from . import __version__
-from .errors import BvcError, SafetyAbort
+from .errors import BvcError, SafetyAbort, UsageError
 from .model import BranchInfo, Commit, CommitResult, DiscardResult, GcReport, LogEntry, MoveResult, WorkState
 from .repo import Repo
 
@@ -268,19 +268,13 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
 
 
 def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
-    # --renameオプションのパース
-    renames = None
-    if args.renames:
-        renames = []
-        for rename_str in args.renames:
-            if "=" not in rename_str:
-                logger.error("--rename の形式が正しくありません: %s (形式: <旧>=<新>)", rename_str)
-                return EXIT_USAGE
-            old, new = rename_str.split("=", 1)
-            if not old or not new:
-                logger.error("--rename の形式が正しくありません: %s (形式: <旧>=<新>)", rename_str)
-                return EXIT_USAGE
-            renames.append((old, new))
+    # --rename 旧=新(パスの検査と正規化は repo 層で行う)
+    renames = []
+    for spec in args.renames or ():
+        old, sep, new = spec.partition("=")
+        if not (sep and old and new):
+            raise UsageError(f"--rename は 旧=新 の形式で指定してください: {spec}")
+        renames.append((old, new))
     with Repo.open(start) as repo:
         result = repo.commit(message=args.message, allow_missing=args.allow_missing, renames=renames)
     if args.json:
@@ -321,6 +315,7 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
                     "added": state.added,
                     "renamed": [list(r) for r in state.renamed],
                     "missing": state.missing,
+                    "hints": state.hints,
                 },
                 "entries": [_entry_to_dict(e) for e in entries],
             }
@@ -479,7 +474,11 @@ def format_size(n: int) -> str:
 def _change_lines(s: WorkState, deleted_label: str = "missing") -> list[str]:
     lines = [f"modified: {p}" for p in s.modified]
     lines += [f"added:    {p}" for p in s.added]
-    lines += [f"renamed:  {a} → {b}" for a, b, _ in s.renamed]
+    # 類似による名前変更だけ類似度を付ける(完全一致・手動指定は 1.0。切り捨てで 100% と紛れない)
+    lines += [
+        f"renamed:  {a} → {b}" + (f" ({int(sim * 100)}%)" if sim < 1.0 else "")
+        for a, b, sim in s.renamed
+    ]
     lines += [f"{deleted_label}:  {p}" for p in s.missing]
     return lines
 

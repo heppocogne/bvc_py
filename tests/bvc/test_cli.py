@@ -1,4 +1,4 @@
-# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-4)。観点: F-1, F-7, F-12, F-14, P-5。
+# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-6)。観点: F-1, F-6, F-7, F-12, F-14, P-5。
 
 import io
 import json
@@ -108,6 +108,50 @@ class TestCommands(CliTestCase):
         self.assertEqual(code, 3)
         data = json.loads(out)
         self.assertEqual((data["type"], data["details"]["missing"]), ("MissingFiles", ["a"]))
+
+
+class TestRename(CliTestCase):
+    # M4-5, M4-6: --rename とヒントの表示(F-6、仕様書 2.6節・3.2節)
+
+    def test_f6_rename_option(self):
+        self.write("a.bin", b"aaa")
+        self.bvc("init", "--track", "*.bin")
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", b"bbb")
+        code, out, err = self.bvc("commit", "--rename", "a.bin=b.bin")
+        self.assertEqual(code, 0, err)
+        self.assertIn("renamed:  a.bin → b.bin", out)
+
+    def test_f6_rename_option_errors(self):
+        self.write("a.bin", b"aaa")
+        self.bvc("init", "--track", "*.bin")
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", b"bbb")
+        for spec in ("a.bin", "=b.bin", "a.bin=", "x.bin=b.bin"):
+            with self.subTest(spec=spec):
+                code, out, _ = self.bvc("--json", "commit", "--rename", spec)
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(out)["type"], "UsageError")
+
+    def test_f6_similarity_shown_as_percent(self):
+        Repo.init(self.tmp, track=["*.bin"], chunker={"name": "fixed", "size": 1024}).close()
+        self.write("a.bin", b"x" * 3072 + b"a" * 1024)
+        self.bvc("commit")
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", b"x" * 3072 + b"b" * 1024)
+        code, out, err = self.bvc("commit")
+        self.assertEqual(code, 0, err)
+        self.assertIn("renamed:  a.bin → b.bin (75%)", out)
+
+    def test_f6_hint_on_abort(self):
+        self.write("result.bin", b"content")
+        self.bvc("init", "--track", "*.bin")
+        (self.tmp / "result.bin").rename(self.tmp / "result.bin.tmp")
+        code, _, err = self.bvc("commit")
+        self.assertEqual(code, 3)
+        self.assertIn("  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp\n", err)
+        code, out, _ = self.bvc("--json", "log")
+        self.assertEqual(json.loads(out)["uncommitted"]["hints"], {"result.bin": ["result.bin.tmp"]})
 
 
 class TestMoveCommands(CliTestCase):

@@ -113,10 +113,14 @@ class TestConfig(unittest.TestCase):
         for patch in ({"track": "x"}, {"ignore": [1]}, {"chunker": {"name": "nope"}},
                       {"compression": "x"}, {"threads": -1}, {"verify_chunks": "x"},
                       {"rules": [{"chunker": {"name": "whole"}}]},
-                      {"rules": [{"pattern": "*", "compression": "x"}]}):
+                      {"rules": [{"pattern": "*", "compression": "x"}]},
+                      {"rename_threshold": 0}, {"rename_threshold": 1.5},
+                      {"rename_threshold": "0.5"}, {"rename_threshold": True}):
             with self.subTest(patch=patch), self.assertRaises(UsageError):
                 parse_config({**base, **patch})
         self.assertEqual(parse_config(base).chunker["name"], "fixed")
+        self.assertEqual(parse_config(base).rename_threshold, 0.5)
+        self.assertEqual(parse_config({**base, "rename_threshold": 1}).rename_threshold, 1.0)
 
 
 class TestCommit(RepoTestCase):
@@ -171,8 +175,6 @@ class TestCommit(RepoTestCase):
         (self.tmp / "a").rename(self.tmp / "b")
         r = repo.commit()
         self.assertEqual(r.commit.renames, (("a", "b", 1.0),))
-
-    # M4-5で実装されたため、このテストは不要になった
 
 
 class TestOpenAndLock(RepoTestCase):
@@ -1089,79 +1091,186 @@ class TestGc(HistoryOpsTestCase):
 
 
 class TestRenameDetection(RepoTestCase):
-    # M4-5, M4-6: 名前変更の検知(F-6)
+    # M4-5, M4-6: 名前変更の検知(F-6、設計書 4.3節、仕様書 2.6節)。
+    # 1KiB の固定長で分割し、共通チャンクの割合(新ファイル基準)を狙った値にする。
+
+    K = 1024
+
+    def init(self, track=("*.bin",), **kw):
+        return super().init(track, chunker={"name": "fixed", "size": self.K}, **kw)
+
+    def blocks(self, *names: str) -> bytes:
+        # 1文字ごとに 1KiB のブロックを作る(同じ文字は同じチャンクになる)
+        return b"".join(n.encode() * self.K for n in names)
+
+    def set_config(self, repo, **values):
+        path = self.tmp / ".bvc" / "config.json"
+        cfg = json.loads(path.read_text("utf-8"))
+        cfg.update(values)
+        path.write_text(json.dumps(cfg), "utf-8")
+        return self.reopen(repo)
 
     def test_f6_exact_match(self):
-        # 完全一致: 内容が全く同じなら、名前変更として認識する
-        repo = self.init()
         self.write("a.bin", b"content1")
         self.write("b.bin", b"content2")
-        r1 = repo.commit()
-        self.assertEqual(r1.state.added, ["a.bin", "b.bin"])
-        self.assertEqual(r1.state.renamed, [])
-
-        # a.bin を削除、c.bin に内容を移す(同じ内容)
-        (self.tmp / "a.bin").unlink()
-        self.write("c.bin", b"content1")
-        r2 = repo.commit()
-        self.assertEqual(r2.state.missing, [])
-        self.assertEqual(r2.state.added, [])  # c.bin は renamed に入るので added には入らない
-        self.assertEqual(r2.state.renamed, [("a.bin", "c.bin", 1.0)])
-        repo.close()
-
-    def test_f6_threshold(self):
-        # 類似度のしきい値: 既定は 0.5
-        # 実装の検証のため、allow_missing を使って欠落を許可し、
-        # 類似度検索が機能している(renamed が空でない)ことを確認する
         repo = self.init()
-        large = b"x" * 1000
-        repo._worktree.config.rename_threshold = 0.5
-        self.write("a.bin", large + b"a" * 400)
-        r1 = repo.commit()
+        (self.tmp / "a.bin").rename(self.tmp / "c.bin")
+        r = repo.commit()
+        self.assertEqual((r.state.renamed, r.state.added, r.state.missing), ([("a.bin", "c.bin", 1.0)], [], []))
+        self.assertEqual(r.commit.renames, (("a.bin", "c.bin", 1.0),))
 
-        # a.bin を削除して b.bin を作成
-        (self.tmp / "a.bin").unlink()
-        self.write("b.bin", large + b"b" * 400)
-        r2 = repo.commit(allow_missing=True)
-        # 詳細は: 実装が正しければ、b.bin との類似度に応じて
-        # renamed に (a.bin, b.bin, sim) が入るか、missing に a.bin が入るかのいずれか
-        # とりあえず、エラーにならないことを確認する
-        self.assertTrue(r2.changed)
-        repo.close()
-
-    def test_f6_manual_override(self):
-        # 手動指定の優先: --rename 旧=新 で指定されたものが優先される
+    def test_f6_exact_match_with_different_chunker(self):
+        # 分割方式が変わってマニフェストが別物でも、内容が同じなら完全一致とみなす
+        self.write("a.bin", self.blocks("x", "y", "z"))
         repo = self.init()
+        repo = self.set_config(repo, rules=[{"pattern": "b.bin", "chunker": {"name": "whole"}}])
+        (self.tmp / "a.bin").rename(self.tmp / "b.bin")
+        r = repo.commit()
+        self.assertNotEqual(r.commit.tree["b.bin"], repo.get_commit(0).tree["a.bin"])
+        self.assertEqual(r.state.renamed, [("a.bin", "b.bin", 1.0)])
+
+    def test_f6_same_content_paired_in_path_order(self):
+        # 同一内容のファイルが複数あれば、パスの辞書順で1対1に対応付ける
+        self.write("g1.bin", b"same")
+        self.write("g2.bin", b"same")
+        repo = self.init()
+        for g in ("g1.bin", "g2.bin"):
+            (self.tmp / g).unlink()
+        self.write("n2.bin", b"same")
+        self.write("n1.bin", b"same")
+        r = repo.commit()
+        self.assertEqual(r.state.renamed, [("g1.bin", "n1.bin", 1.0), ("g2.bin", "n2.bin", 1.0)])
+
+    def test_f6_similar_above_and_below_threshold(self):
+        # 共通 3/4 = 0.75(既定 0.5 以上)と、共通 1/4 = 0.25(未満)
+        self.write("a.bin", self.blocks("x", "x", "x", "a"))
+        self.write("b.bin", self.blocks("y", "b", "b", "b"))
+        repo = self.init()
+        (self.tmp / "a.bin").unlink()
+        (self.tmp / "b.bin").unlink()
+        self.write("a2.bin", self.blocks("x", "x", "x", "c"))
+        self.write("b2.bin", self.blocks("y", "d", "d", "d"))
+        with self.assertRaises(MissingFiles) as cm:
+            repo.commit()
+        self.assertEqual(cm.exception.details["missing"], ["b.bin"])
+        r = repo.commit(allow_missing=True)
+        self.assertEqual(r.state.renamed, [("a.bin", "a2.bin", 0.75)])
+        self.assertEqual((r.state.added, r.state.missing), (["b2.bin"], ["b.bin"]))
+
+    def test_f6_threshold_boundary_and_config(self):
+        # sim = しきい値ちょうどは名前変更。しきい値は config.json の rename_threshold を使う
+        self.write("a.bin", self.blocks("x", "a"))
+        repo = self.init()
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", self.blocks("x", "b"))
+        self.assertEqual(repo.work_state().renamed, [("a.bin", "b.bin", 0.5)])
+        repo = self.set_config(repo, rename_threshold=0.6)
+        self.assertEqual(repo.work_state().missing, ["a.bin"])
+
+    def test_f6_similarity_uses_new_file_size(self):
+        # sim は新ファイル基準: 追記で大きくなったファイルは割合が下がる
+        self.write("a.bin", self.blocks("x", "y"))
+        repo = self.init()
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", self.blocks("x", "y", "p", "q", "r"))  # 2/5 = 0.4
+        self.assertEqual(repo.work_state().missing, ["a.bin"])
+
+    def test_f6_greedy_by_similarity_then_path(self):
+        # sim の高い組から確定する。同じ sim なら辞書順で、実行ごとに変わらない
+        self.write("g1.bin", self.blocks("c", "1"))
+        self.write("g2.bin", self.blocks("c", "2"))
+        self.write("h.bin", self.blocks("h", "h", "h", "0"))
+        repo = self.init()
+        for g in ("g1.bin", "g2.bin", "h.bin"):
+            (self.tmp / g).unlink()
+        self.write("n2.bin", self.blocks("c", "4"))
+        self.write("n1.bin", self.blocks("c", "3"))
+        self.write("m.bin", self.blocks("h", "h", "h", "c"))  # h.bin と 0.75、g1/g2 と 0.25
+        r = repo.commit()
+        self.assertEqual(
+            r.state.renamed,
+            [("h.bin", "m.bin", 0.75), ("g1.bin", "n1.bin", 0.5), ("g2.bin", "n2.bin", 0.5)],
+        )
+
+    def test_f6_manual_rename_takes_priority(self):
+        # 自動なら a → b(完全一致)になる場面で、手動指定の a → c を優先する
         self.write("a.bin", b"content_a")
-        self.write("b.bin", b"content_b")
-        r1 = repo.commit()
-
-        # a を削除、c と d を作成
+        repo = self.init()
         (self.tmp / "a.bin").unlink()
-        self.write("c.bin", b"content_a")
-        self.write("d.bin", b"other")
-        # 手動で a -> c への名前変更を指定
-        r2 = repo.commit(renames=[("a.bin", "c.bin")])
-        self.assertEqual(r2.state.renamed, [("a.bin", "c.bin", 1.0)])
-        self.assertEqual(r2.state.added, ["d.bin"])
-        repo.close()
+        self.write("b.bin", b"content_a")
+        self.write("c.bin", b"other")
+        self.assertEqual(repo.work_state().renamed, [("a.bin", "b.bin", 1.0)])
+        r = repo.commit(renames=[("a.bin", "c.bin")])
+        self.assertEqual((r.state.renamed, r.state.added), ([("a.bin", "c.bin", 1.0)], ["b.bin"]))
 
-    def test_f6_hints(self):
-        # パターン外へのリネームでのヒント表示
-        repo = self.init(track=["*.bin"])
-        self.write("tracked.bin", b"content")
-        r1 = repo.commit()
+    def test_f6_manual_rename_path_forms(self):
+        # '\\' 区切り・先頭の './'・大文字小文字の違いを受け付ける
+        self.write("sub/a.bin", b"aaa")
+        repo = self.init(track=["**/*.bin"])
+        (self.tmp / "sub" / "a.bin").unlink()
+        self.write("sub/z.bin", b"zzz")
+        r = repo.commit(renames=[(".\\sub\\A.bin", "./sub/z.bin")])
+        self.assertEqual(r.state.renamed, [("sub/a.bin", "sub/z.bin", 1.0)])
 
-        # tracked.bin を削除、パターン外の .txt に内容を移す
-        (self.tmp / "tracked.bin").unlink()
-        self.write("untracked.txt", b"content")
-        r2 = repo.commit(allow_missing=True)
-        # missing に入る
-        self.assertEqual(r2.state.missing, ["tracked.bin"])
-        # hints に untracked.txt が入っているはず (同じ内容なので)
-        self.assertIn("tracked.bin", r2.state.hints)
-        self.assertIn("untracked.txt", r2.state.hints["tracked.bin"])
-        repo.close()
+    def test_f6_manual_rename_invalid_is_usage_error(self):
+        # 当てはまらない・重複・不正なパスの指定は、何も記録せずに中止する(D-15)
+        self.write("a.bin", b"a")
+        self.write("b.bin", b"b")
+        repo = self.init()
+        (self.tmp / "a.bin").unlink()
+        (self.tmp / "b.bin").unlink()
+        self.write("c.bin", b"c")
+        self.write("d.bin", b"d")
+        for renames in ([("x.bin", "c.bin")],          # 消えていない
+                        [("a.bin", "b.bin")],          # 新しいファイルではない
+                        [("a.bin", "c.bin"), ("b.bin", "c.bin")],  # 新しい側の重複
+                        [("../a.bin", "c.bin")],       # 作業フォルダの外
+                        [(".bvc/x", "c.bin")]):
+            with self.subTest(renames=renames), self.assertRaises(UsageError):
+                repo.commit(renames=renames)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 1)
+
+    def test_f6_hint_for_file_moved_out_of_pattern(self):
+        # 仕様書 2.6節の例: result.bin → result.bin.tmp。rules で分割方式を変えていても見つける
+        self.write("result.bin", self.blocks("r", "s", "t"))
+        self.write("sub/x.bin", b"xx")
+        repo = self.init(track=["*.bin", "sub/*.bin"])
+        repo = self.set_config(repo, rules=[{"pattern": "*.bin", "chunker": {"name": "whole"}}])
+        (self.tmp / "result.bin").rename(self.tmp / "result.bin.tmp")
+        (self.tmp / "sub" / "x.bin").rename(self.tmp / "sub" / "x.bak")
+        self.write("other.tmp", self.blocks("r", "s", "u"))  # 同じサイズで内容が違う
+        with self.assertRaises(MissingFiles) as cm:
+            repo.commit()
+        e = cm.exception
+        self.assertEqual(e.details["hints"], {"result.bin": ["result.bin.tmp"], "sub/x.bin": ["sub/x.bak"]})
+        self.assertIn("  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp", str(e))
+        self.assertEqual(repo.work_state().hints, e.details["hints"])
+        # --allow-missing のときは探さない(読み込みを省く)
+        r = repo.commit(allow_missing=True)
+        self.assertEqual((r.state.missing, r.state.hints), (["result.bin", "sub/x.bin"], {}))
+
+    def test_f6_status_has_no_side_effects_and_matches_commit(self):
+        # status は保存しないため、新ファイルのマニフェストが無くても隔離記録を作らない
+        self.write("a.bin", self.blocks("x", "x", "x", "a"))
+        repo = self.init()
+        health = (self.tmp / ".bvc" / "health.json").read_bytes()
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", self.blocks("x", "x", "x", "b"))
+        s = repo.work_state()
+        self.assertEqual((s.renamed, s.added, s.missing), ([("a.bin", "b.bin", 0.75)], [], []))
+        self.assertEqual((self.tmp / ".bvc" / "health.json").read_bytes(), health)
+        self.assertFalse(list((self.tmp / ".bvc" / "quarantine").rglob("*.json")))
+        self.assertEqual(repo.commit().state.renamed, s.renamed)
+
+    def test_f6_auto_commit_detects_similar_rename(self):
+        # 自動コミットも commit と同じ判定を使う
+        repo = self.init()
+        self.write("a.bin", self.blocks("x", "x", "x", "a"))
+        repo.commit()
+        (self.tmp / "a.bin").unlink()
+        self.write("b.bin", self.blocks("x", "x", "x", "b"))
+        r = repo.goto("0")
+        self.assertEqual(r.auto_commit.renames, (("a.bin", "b.bin", 0.75),))
 
 
 if __name__ == "__main__":

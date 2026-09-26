@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import logging
 import os
 import shutil
 import stat
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Collection, Final
 
@@ -20,6 +22,7 @@ from .errors import (
     FileChanging,
     SafetyAbort,
     UnsafePath,
+    UsageError,
 )
 from .fsutil import (
     IS_WINDOWS,
@@ -39,8 +42,8 @@ from .fsutil import (
     replace,
     resolve_in_workdir,
 )
-from .model import Config, Head, ProgressEvent, PutStats, RestoreResult, WorkState
-from .store import ObjectStore, ProgressFn
+from .model import Config, Head, Manifest, ProgressEvent, PutStats, RestoreResult, WorkState
+from .store import ObjectStore, ProgressFn, manifest_sha
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,19 @@ DISK_MARGIN: Final[int] = 64 << 20
 
 # journal.json の状態(設計書 4.6節。取りうる値の集合なので可変長)
 JOURNAL_STATES: Final[tuple[str, ...]] = ("staging", "swapping", "swapped")
+
+
+class _ManifestCache:
+    # パス → マニフェスト(得られなければ None)を1回だけ求めて覚えておく。名前変更の検知用。
+
+    def __init__(self, load: Callable[[str], Manifest | None]):
+        self._load = load
+        self._cache: dict[str, Manifest | None] = {}
+
+    def get(self, rel: str) -> Manifest | None:
+        if rel not in self._cache:
+            self._cache[rel] = self._load(rel)
+        return self._cache[rel]
 
 
 class Worktree:
@@ -175,10 +191,12 @@ class Worktree:
         base_tree: dict[str, str],
         store_chunks: bool,
         no_cache: Collection[str] = (),
-        renames: list[tuple[str, str]] | None = None,
-        rename_threshold: float = 0.5,
+        renames: Collection[tuple[str, str]] = (),
+        find_hints: bool = True,
     ) -> WorkState:
         # 作業フォルダの状態を base_tree と比べる。store_chunks なら変わったファイルを保存する。
+        # renames は名前変更の手動指定(正規化済みの相対パスの組)。当てはまらなければ UsageError。
+        # find_hints なら、missing についてパターン外の同じ内容のファイルを探す(読み込みを伴う)。
         fs_time_ns = self._mark_fs_time()
         index, index_fs_time = self._load_index()
         files = self._scan()
@@ -227,11 +245,10 @@ class Worktree:
 
         # 名前変更の検知(設計書 4.3節)
         renamed, missing, hints = self._detect_renames(
-            gone, added, base_tree, tree, renames, rename_threshold
+            gone, added, base_tree, tree, renames, self.config.rename_threshold, find_hints
         )
-        # renamed から消費された added は除く
         renamed_to = {r[1] for r in renamed}
-        added = sorted(p for p in added if p not in renamed_to)
+        added = [p for p in added if p not in renamed_to]
 
         self._stats = stats
         return WorkState(
@@ -355,116 +372,197 @@ class Worktree:
             return {}, 0
         return out, fs_time_ns
 
+    # --- 名前変更の検知(M4-5, M4-6、設計書 4.3節、仕様書 2.6節) ---
+
     def _detect_renames(
         self,
         gone: list[str],
         added: list[str],
         base_tree: dict[str, str],
         tree: dict[str, str],
-        renames: list[tuple[str, str]] | None,
+        renames: Collection[tuple[str, str]],
         threshold: float,
+        find_hints: bool,
     ) -> tuple[list[tuple[str, str, float]], list[str], dict[str, list[str]]]:
-        # 名前変更を検知する(設計書 4.3節)。(renamed, missing, hints) を返す。
-        # 消えた集合 G、新しい集合 N
-        G_set = set(gone)
-        N_set = set(added)
+        # 消えた集合 G と新しい集合 N を対応付け、(renamed, missing, hints) を返す。
+        # 結果は入力だけで決まる(集合の反復順に依存しない)ようにする。
+        g_left = set(gone)
+        n_left = set(added)
         renamed: list[tuple[str, str, float]] = []
-        hints: dict[str, list[str]] = {}
 
-        # 1. 手動指定(--rename)を確定し、G と N から除く
-        if renames:
-            for g, n in renames:
-                if g in G_set and n in N_set:
-                    renamed.append((g, n, 1.0))
-                    G_set.discard(g)
-                    N_set.discard(n)
+        def take(g: str, n: str, sim: float) -> None:
+            renamed.append((g, n, sim))
+            g_left.discard(g)
+            n_left.discard(n)
 
-        # 2. manifest.sha256 が一致する組を確定する(1対1。複数あればパスの辞書順)
-        for g in sorted(G_set):
-            if base_tree[g] in tree.values():
-                candidates = [n for n in sorted(N_set) if tree[n] == base_tree[g]]
-                if candidates:
-                    n = candidates[0]
-                    renamed.append((g, n, 1.0))
-                    G_set.discard(g)
-                    N_set.discard(n)
+        # 1. 手動指定(--rename)を確定する。当てはまらない指定は、推測せずに中止する
+        for g, n in self._resolve_manual_renames(renames, g_left, n_left):
+            take(g, n, 1.0)
 
-        # 3. 残りについて sim(g, n) を計算し、sim >= threshold の組を貪欲に確定
-        # sim(g, n) = |chunks(g) ∩ chunks(n)| のバイト数 / size(n)
-        def similarity(g: str, n: str) -> float:
-            # マニフェストからチャンク情報を取得
-            try:
-                g_manifest = self.store.get_manifest(base_tree[g])
-                n_manifest = self.store.get_manifest(tree[n])
-            except Exception:
-                return 0.0
-            if not g_manifest or not n_manifest:
-                return 0.0
-            g_chunks = {c.sha for c in g_manifest.chunks}
-            n_chunks = {c.sha for c in n_manifest.chunks}
-            # 共通チャンクのバイト数
-            common_bytes = sum(c.length for c in n_manifest.chunks if c.sha in g_chunks)
-            n_size = n_manifest.size
-            return common_bytes / n_size if n_size > 0 else 0.0
+        old_m = _ManifestCache(lambda g: self._old_manifest(base_tree[g]))
+        new_m = _ManifestCache(lambda n: self._new_manifest(n, tree[n]))
 
-        # 類似度のペアリスト[(g, n, sim)]を作成
-        sims: list[tuple[str, str, float]] = []
-        for g in G_set:
-            for n in N_set:
-                sim = similarity(g, n)
-                if sim >= threshold:
-                    sims.append((g, n, sim))
+        # 2. 内容(manifest.sha256)が一致する組を確定する(1対1。複数あればパスの辞書順)。
+        # マニフェストの名前が同じなら内容も同じなので、まずそれで判定する(読み込み不要)。
+        # 残りは分割方式が異なる場合に備えて、内容全体のハッシュで比べる
+        for g in sorted(g_left):
+            n = next((n for n in sorted(n_left) if tree[n] == base_tree[g]), None)
+            if n is not None:
+                take(g, n, 1.0)
+        if g_left and n_left:
+            by_content: dict[str, list[str]] = {}
+            for n in sorted(n_left):
+                m = new_m.get(n)
+                if m is not None:
+                    by_content.setdefault(m.sha256, []).append(n)
+            for g in sorted(g_left):
+                m = old_m.get(g)
+                cands = by_content.get(m.sha256) if m is not None else None
+                if cands:
+                    take(g, cands.pop(0), 1.0)
 
-        # sim の高い順にソートして貪欲に確定
-        for g, n, sim in sorted(sims, key=lambda x: -x[2]):
-            if g in G_set and n in N_set:
-                renamed.append((g, n, sim))
-                G_set.discard(g)
-                N_set.discard(n)
+        # 3. 残りについて sim(g, n) = |chunks(g) ∩ chunks(n)| のバイト数 / size(n) を計算し、
+        # sim ≥ threshold の組を sim の高い順に貪欲に確定する(同じ sim ならパスの辞書順)
+        if g_left and n_left:
+            sims: list[tuple[float, str, str]] = []
+            for g in sorted(g_left):
+                gm = old_m.get(g)
+                if gm is None:
+                    continue
+                g_chunks = {c.sha for c in gm.chunks}
+                for n in sorted(n_left):
+                    nm = new_m.get(n)
+                    if nm is None or nm.size == 0:
+                        continue
+                    common = sum(c.length for c in nm.chunks if c.sha in g_chunks)
+                    sim = common / nm.size
+                    if sim >= threshold:
+                        sims.append((sim, g, n))
+            sims.sort(key=lambda x: (-x[0], x[1], x[2]))
+            for sim, g, n in sims:
+                if g in g_left and n in n_left:
+                    take(g, n, sim)
 
         # 4. 残った G を missing とする
-        missing = sorted(G_set)
+        missing = sorted(g_left)
 
-        # 5. missing ごとに、パターン外のファイルでサイズが一致するものを探す（ヒント）
-        # パターン外のファイルを列挙する(作業フォルダ直下と同じフォルダのみ)
-        def list_untracked_files() -> list[tuple[str, Path]]:
-            # (パス, 実際のフルパス) のペアリスト
-            untracked = []
-            try:
-                for entry in os.scandir(os_path(self.workdir)):
-                    if entry.name.casefold() == ".bvc":
-                        continue
-                    if entry.is_file(follow_symlinks=False):
-                        if entry.name not in self._names.values():
-                            untracked.append((entry.name, self.workdir / entry.name))
-            except OSError:
-                pass
-            return untracked
-
-        for m in missing:
-            try:
-                g_manifest = self.store.get_manifest(base_tree[m])
-            except Exception:
-                continue
-            if not g_manifest:
-                continue
-            g_size = g_manifest.size
-            # パターン外のファイルの中から同じサイズのものを探す
-            for path, full in list_untracked_files():
-                try:
-                    st = os.stat(os_path(full))
-                    if st.st_size == g_size:
-                        chunker, _ = self._rule_for(path)
-                        with open(os_path(full), "rb") as f:
-                            sha = self.store.hash_file(f, chunker)
-                        if sha == base_tree[m]:
-                            if m not in hints:
-                                hints[m] = []
-                            hints[m].append(path)
-                except (FileNotFoundError, OSError):
-                    pass
-
+        # 5. missing ごとに、パターン外で同じ内容のファイルを探す(ヒント)
+        hints = self._find_hints(missing, old_m) if find_hints and missing else {}
         return renamed, missing, hints
+
+    def _resolve_manual_renames(
+        self,
+        renames: Collection[tuple[str, str]],
+        gone: set[str],
+        added: set[str],
+    ) -> list[tuple[str, str]]:
+        # 手動指定の組を、消えたパス・新しいパスに対応付ける。
+        # 大文字小文字だけが異なる指定も受け付ける(一意に決まる場合のみ)。
+        def resolve(p: str, pool: set[str], what: str) -> str:
+            if p in pool:
+                return p
+            found = [q for q in pool if q.casefold() == p.casefold()]
+            if len(found) == 1:
+                return found[0]
+            raise UsageError(f"--rename: {p} は{what}ではありません", path=p)
+
+        out: list[tuple[str, str]] = []
+        used_g: set[str] = set()
+        used_n: set[str] = set()
+        for g, n in renames:
+            g = resolve(g, gone, "前の版にあって作業フォルダから消えた追跡ファイル")
+            n = resolve(n, added, "新しく追加された追跡ファイル")
+            if g in used_g or n in used_n:
+                raise UsageError(f"--rename: 同じパスが複数回指定されています: {g}={n}", path=g)
+            used_g.add(g)
+            used_n.add(n)
+            out.append((g, n))
+        return out
+
+    def _old_manifest(self, sha: str) -> Manifest | None:
+        # 前の版のマニフェスト。壊れていれば None(対応付けに使わない。その版は verify で扱う)。
+        try:
+            return self.store.get_manifest(sha)
+        except CorruptData:
+            return None
+
+    def _new_manifest(self, rel: str, sha: str) -> Manifest | None:
+        # 作業ファイルのマニフェスト。保存済みならそれを読み、無ければ(保存しない status のとき)
+        # ファイルから組み立て直す。保存されていないマニフェストを get_manifest で読むと
+        # 「欠落」として隔離記録されてしまうため、先に存在を確かめる。
+        if os.path.exists(os_path(self.store.manifest_path(sha))):
+            try:
+                return self.store.get_manifest(sha)
+            except CorruptData:
+                pass
+        chunker, _ = self._rule_for(rel)
+        full = self.workdir / self._names.get(rel, rel)
+        try:
+            with open(os_path(full), "rb") as f:
+                m = self.store.build_manifest(f, chunker)
+        except FileNotFoundError as e:
+            raise FileChanging(f"読み取り中にファイルが消えました: {rel}", path=rel) from e
+        except OSError as e:
+            raise FileBusy(f"ファイルを読み取れません: {rel}({e})", path=rel) from e
+        # 走査の後に書き換わっていれば、この走査の結果とは別物なので使わない
+        return m if manifest_sha(m) == sha else None
+
+    def _find_hints(self, missing: list[str], old_m: _ManifestCache) -> dict[str, list[str]]:
+        # 作業フォルダ直下と、missing のあったフォルダだけを探す(設計書 4.3節の5)。
+        # 追跡パターン外の通常ファイルのうち、サイズと内容全体の SHA-256 が一致するもの。
+        # 表示のためだけの情報なので、読めないファイルは飛ばす。
+        tracked = {p.casefold() for p in self._names}
+        listed: dict[str, list[tuple[str, int]]] = {}
+        hints: dict[str, list[str]] = {}
+        for g in missing:
+            m = old_m.get(g)
+            if m is None:
+                continue
+            folder = g.rpartition("/")[0]
+            found: list[str] = []
+            for d in dict.fromkeys(["", folder]):
+                if d not in listed:
+                    listed[d] = self._list_untracked(d, tracked)
+                for rel, size in listed[d]:
+                    if size == m.size and self._content_sha256(rel) == m.sha256:
+                        found.append(rel)
+            if found:
+                hints[g] = found
+        return hints
+
+    def _list_untracked(self, rel_dir: str, tracked: set[str]) -> list[tuple[str, int]]:
+        # rel_dir 直下の、追跡対象でない通常ファイルの (相対パス, サイズ)。リンクは含めない。
+        dir_path = self.workdir / rel_dir if rel_dir else self.workdir
+        out: list[tuple[str, int]] = []
+        try:
+            with os.scandir(os_path(dir_path)) as it:
+                entries = list(it)
+        except OSError:
+            return out
+        for e in entries:
+            if not rel_dir and e.name.casefold() == ".bvc":
+                continue
+            rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
+            if unicodedata.normalize("NFC", rel).casefold() in tracked:
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_link_or_reparse(st) or not stat.S_ISREG(st.st_mode):
+                continue
+            out.append((rel, st.st_size))
+        return sorted(out)
+
+    def _content_sha256(self, rel: str) -> str | None:
+        h = hashlib.sha256()
+        try:
+            with open(os_path(self.workdir / rel), "rb") as f:
+                while piece := f.read(1 << 20):
+                    h.update(piece)
+        except OSError:
+            return None
+        return h.hexdigest()
 
     def _mark_fs_time(self) -> int:
         # .bvc/tmp に空の目印ファイルを作り、その更新日時を読んで消す(設計書 2.5節、I-14)。
