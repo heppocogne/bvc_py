@@ -124,6 +124,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="見つからない追跡ファイルを削除として記録する",
     )
+    p.add_argument(
+        "--rename",
+        action="append",
+        dest="renames",
+        metavar="<旧>=<新>",
+        help="名前変更を手動指定する(複数指定可)",
+    )
 
     p = sub.add_parser("log", help="版のツリーを表示する")
     p.add_argument("-n", dest="limit", type=int, metavar="<件数>", help="表示件数")
@@ -261,8 +268,21 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
 
 
 def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
+    # --renameオプションのパース
+    renames = None
+    if args.renames:
+        renames = []
+        for rename_str in args.renames:
+            if "=" not in rename_str:
+                logger.error("--rename の形式が正しくありません: %s (形式: <旧>=<新>)", rename_str)
+                return EXIT_USAGE
+            old, new = rename_str.split("=", 1)
+            if not old or not new:
+                logger.error("--rename の形式が正しくありません: %s (形式: <旧>=<新>)", rename_str)
+                return EXIT_USAGE
+            renames.append((old, new))
     with Repo.open(start) as repo:
-        result = repo.commit(message=args.message, allow_missing=args.allow_missing)
+        result = repo.commit(message=args.message, allow_missing=args.allow_missing, renames=renames)
     if args.json:
         _print_json(result)
         return EXIT_OK

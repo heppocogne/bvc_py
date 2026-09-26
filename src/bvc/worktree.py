@@ -165,6 +165,8 @@ class Worktree:
         base_tree: dict[str, str],
         store_chunks: bool,
         no_cache: Collection[str] = (),
+        renames: list[tuple[str, str]] | None = None,
+        rename_threshold: float = 0.5,
     ) -> WorkState:
         # 作業フォルダの状態を base_tree と比べる。store_chunks なら変わったファイルを保存する。
         fs_time_ns = self._mark_fs_time()
@@ -208,15 +210,11 @@ class Worktree:
         added = sorted(p for p in tree if p not in base_tree)
         gone = sorted(p for p in base_tree if p not in tree)
 
-        # 名前変更(内容が完全一致する組だけ。類似度による検知は M4。設計書 4.3節)
-        renamed: list[tuple[str, str, float]] = []
-        for g in gone:
-            n = next((a for a in added if tree[a] == base_tree[g]), None)
-            if n is not None:
-                renamed.append((g, n, 1.0))
-                added.remove(n)
-        renamed_from = {r[0] for r in renamed}
-        missing = [g for g in gone if g not in renamed_from]
+        # 名前変更の検知(設計書 4.3節)
+        renamed, missing, hints = self._detect_renames(gone, added, base_tree, tree, renames, rename_threshold)
+        # renamed から消費された added は除く
+        renamed_to = {r[1] for r in renamed}
+        added = sorted(p for p in added if p not in renamed_to)
 
         self._stats = stats
         return WorkState(
@@ -225,6 +223,7 @@ class Worktree:
             added=added,
             renamed=renamed,
             missing=missing,
+            hints=hints,
             total_bytes=total_bytes,
             new_bytes=new_bytes,
             fs_time_ns=fs_time_ns,
@@ -322,6 +321,117 @@ class Worktree:
             logger.warning("index.json: 内容が不正です(作り直します)")
             return {}, 0
         return out, fs_time_ns
+
+    def _detect_renames(
+        self,
+        gone: list[str],
+        added: list[str],
+        base_tree: dict[str, str],
+        tree: dict[str, str],
+        renames: list[tuple[str, str]] | None,
+        threshold: float,
+    ) -> tuple[list[tuple[str, str, float]], list[str], dict[str, list[str]]]:
+        # 名前変更を検知する(設計書 4.3節)。(renamed, missing, hints) を返す。
+        # 消えた集合 G、新しい集合 N
+        G_set = set(gone)
+        N_set = set(added)
+        renamed: list[tuple[str, str, float]] = []
+        hints: dict[str, list[str]] = {}
+
+        # 1. 手動指定(--rename)を確定し、G と N から除く
+        if renames:
+            for g, n in renames:
+                if g in G_set and n in N_set:
+                    renamed.append((g, n, 1.0))
+                    G_set.discard(g)
+                    N_set.discard(n)
+
+        # 2. manifest.sha256 が一致する組を確定する(1対1。複数あればパスの辞書順)
+        for g in sorted(G_set):
+            if base_tree[g] in tree.values():
+                candidates = [n for n in sorted(N_set) if tree[n] == base_tree[g]]
+                if candidates:
+                    n = candidates[0]
+                    renamed.append((g, n, 1.0))
+                    G_set.discard(g)
+                    N_set.discard(n)
+
+        # 3. 残りについて sim(g, n) を計算し、sim >= threshold の組を貪欲に確定
+        # sim(g, n) = |chunks(g) ∩ chunks(n)| のバイト数 / size(n)
+        def similarity(g: str, n: str) -> float:
+            # マニフェストからチャンク情報を取得
+            try:
+                g_manifest = self.store.get_manifest(base_tree[g])
+                n_manifest = self.store.get_manifest(tree[n])
+            except Exception:
+                return 0.0
+            if not g_manifest or not n_manifest:
+                return 0.0
+            g_chunks = {c.sha for c in g_manifest.chunks}
+            n_chunks = {c.sha for c in n_manifest.chunks}
+            # 共通チャンクのバイト数
+            common_bytes = sum(c.length for c in n_manifest.chunks if c.sha in g_chunks)
+            n_size = n_manifest.size
+            return common_bytes / n_size if n_size > 0 else 0.0
+
+        # 類似度のペアリスト[(g, n, sim)]を作成
+        sims: list[tuple[str, str, float]] = []
+        for g in G_set:
+            for n in N_set:
+                sim = similarity(g, n)
+                if sim >= threshold:
+                    sims.append((g, n, sim))
+
+        # sim の高い順にソートして貪欲に確定
+        for g, n, sim in sorted(sims, key=lambda x: -x[2]):
+            if g in G_set and n in N_set:
+                renamed.append((g, n, sim))
+                G_set.discard(g)
+                N_set.discard(n)
+
+        # 4. 残った G を missing とする
+        missing = sorted(G_set)
+
+        # 5. missing ごとに、パターン外のファイルでサイズが一致するものを探す（ヒント）
+        # パターン外のファイルを列挙する(作業フォルダ直下と同じフォルダのみ)
+        def list_untracked_files() -> list[tuple[str, Path]]:
+            # (パス, 実際のフルパス) のペアリスト
+            untracked = []
+            try:
+                for entry in os.scandir(os_path(self.workdir)):
+                    if entry.name.casefold() == ".bvc":
+                        continue
+                    if entry.is_file(follow_symlinks=False):
+                        if entry.name not in self._names.values():
+                            untracked.append((entry.name, self.workdir / entry.name))
+            except OSError:
+                pass
+            return untracked
+
+        for m in missing:
+            try:
+                g_manifest = self.store.get_manifest(base_tree[m])
+            except Exception:
+                continue
+            if not g_manifest:
+                continue
+            g_size = g_manifest.size
+            # パターン外のファイルの中から同じサイズのものを探す
+            for path, full in list_untracked_files():
+                try:
+                    st = os.stat(os_path(full))
+                    if st.st_size == g_size:
+                        chunker, _ = self._rule_for(path)
+                        with open(os_path(full), "rb") as f:
+                            sha = self.store.hash_file(f, chunker)
+                        if sha == base_tree[m]:
+                            if m not in hints:
+                                hints[m] = []
+                            hints[m].append(path)
+                except (FileNotFoundError, OSError):
+                    pass
+
+        return renamed, missing, hints
 
     def _mark_fs_time(self) -> int:
         # .bvc/tmp に空の目印ファイルを作り、その更新日時を読んで消す(設計書 2.5節、I-14)。

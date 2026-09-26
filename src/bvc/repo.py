@@ -301,11 +301,14 @@ class Repo:
     ) -> CommitResult:
         # 追跡ファイルの現状を新しい版として記録する(M2-10)。
         # 書き込み順: チャンク → マニフェスト → counters → 版 → HEAD → (bvc.lock: M6) → index → oplog(設計書 4.7節)。
-        if renames:
-            raise UsageError("名前変更の手動指定(--rename)は M4 で実装します")
         head = self._history.head()
         base = self._history.get(head.at)
-        state = self._worktree.state(base_tree=base.tree, store_chunks=True)
+        state = self._worktree.state(
+            base_tree=base.tree,
+            store_chunks=True,
+            renames=renames or [],
+            rename_threshold=self.config.rename_threshold,
+        )
 
         if state.missing and not allow_missing:
             raise _missing_error(state)

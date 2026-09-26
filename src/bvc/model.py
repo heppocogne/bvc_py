@@ -173,6 +173,7 @@ class Config:
     chunker: dict = field(default_factory=lambda: {"name": "fixed", "size": 4194304})  # 既定の分割方式
     compression: str = "auto"                           # 既定の圧縮("auto", "zlib", "none")
     verify_chunks: str = "exists"                       # チャンク検証の強度("exists", "full")
+    rename_threshold: float = 0.5                       # 名前変更とみなす類似度(仕様書 4節)
     threads: int = 0                                    # ワーカースレッド数(0 = CPU数)
 
 
