@@ -153,6 +153,7 @@ class MoveResult:
     auto_commit: Commit | None = None  # 自動コミット(あれば)
     restored: list[str] = field(default_factory=list)  # 復元されたパス
     deleted: list[str] = field(default_factory=list)   # 削除されたパス
+    skipped: list[int] = field(default_factory=list)   # --skip-broken で飛ばした壊れた版(近い順)
 
 
 @dataclass(slots=True)
@@ -172,7 +173,7 @@ class Config:
     rules: list[dict] = field(default_factory=list)     # パターンごとの chunker/compression
     chunker: dict = field(default_factory=lambda: {"name": "fixed", "size": 4194304})  # 既定の分割方式
     compression: str = "auto"                           # 既定の圧縮("auto", "zlib", "none")
-    verify_chunks: str = "exists"                       # チャンク検証の強度("exists", "full")
+    commit_verify: str = "exists"                       # コミット時に再利用する保存データの検査("exists", "full")
     rename_threshold: float = 0.5                       # 名前変更とみなす類似度(仕様書 4節)
     threads: int = 0                                    # ワーカースレッド数(0 = CPU数)
 
@@ -213,3 +214,25 @@ class GcReport:
     deleted_tmp: int = 0                                      # tmp/ の残骸
     freed_bytes: int = 0                                      # 削除したファイルの合計サイズ
     skipped: list[str] = field(default_factory=list)          # 安全のため見送った削除("manifests", "chunks")
+
+
+@dataclass(slots=True)
+class VerifyReport:
+    # verify の結果。仕様書 3.10節、設計書 4.9節。
+    # 壊れたチャンク・マニフェストは、生きている版(と pin された版)から参照されているものだけを入れる。
+
+    changed: bool                                             # 隔離・健全性の記録・修復で何かを変えたか
+    quick: bool
+    repair: bool
+    checked_chunks: int = 0
+    checked_manifests: int = 0
+    checked_commits: int = 0                                  # 検査した版(生きている版と pin された版)
+    bad_chunks: list[str] = field(default_factory=list)       # 欠損・破損しているチャンク(修復できなかったもの)
+    bad_manifests: list[str] = field(default_factory=list)    # 欠損・破損しているマニフェスト(同上)
+    broken_commits: list[int] = field(default_factory=list)   # 壊れた版(検査の後に残ったもの)
+    repaired_chunks: list[str] = field(default_factory=list)  # --repair で保存し直したチャンク
+    repaired_manifests: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.broken_commits

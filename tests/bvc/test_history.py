@@ -312,5 +312,56 @@ class TestNotesDiscardBranches(HistoryTestCase):
         )
 
 
+class TestControlRecovery(HistoryTestCase):
+    # M4-10: 管理ファイルの検査と作り直し(C-7、設計書 4.12節)。
+
+    def log(self, **entry):
+        self.h.log_op({"op": "x", "created": [], "before": None, "after": None, **entry})
+
+    def test_check_branches(self):
+        self.assertIsNotNone(self.h.check_branches())  # 無い
+        self.write_branches({"0": "main"})
+        self.assertIsNone(self.h.check_branches())
+        for content in (b"{", b'{"format":1,"names":[]}'):
+            (self.bvc / "branches.json").write_bytes(content)
+            self.assertIsNotNone(self.h.check_branches())
+        self.h.reset_branches()
+        self.assertIsNone(self.h.check_branches())
+        (self.bvc / "branches.json").write_bytes(b'{"format":2,"names":{}}')
+        with self.assertRaises(UnsupportedFormat):
+            self.h.check_branches()
+
+    def test_rebuild_counters(self):
+        self.linear(3)                     # 版 0..2、ブランチ 0
+        self.log(created=[7], after={"at": 2, "branch": 5})
+        self.discard(2)
+        fsutil.append_jsonl(self.bvc / "discarded.jsonl", {"format": 1, "time": "t", "id": 9})
+        (self.bvc / "counters.json").write_bytes(b"{")
+        self.assertIsNotNone(self.h.check_counters())
+        h = load(self.bvc)
+        self.assertEqual(h.rebuild_counters(), {"next_commit": 10, "next_branch": 6})
+        self.assertIsNone(h.check_counters())
+        self.assertEqual(self.commit(1, h=h).id, 10)
+
+    def test_check_head_and_oplog(self):
+        self.linear(3)
+        self.assertIsNotNone(self.h.check_head())  # 無い
+        self.h.set_head(Head(2, 0))
+        self.assertIsNone(self.h.check_head())
+        self.h.set_head(Head(9, 0))
+        self.assertIn("存在しない", self.h.check_head())
+        self.discard(2)
+        h = load(self.bvc)
+        h.set_head(Head(2, 0))
+        self.assertIn("削除済み", h.check_head())
+
+        self.assertIsNone(h.head_from_oplog())
+        self.log(after={"at": 1, "branch": 0})
+        self.log()  # after の無い記録は飛ばす
+        self.assertEqual(h.head_from_oplog(), Head(1, 0))
+        self.log(after={"at": 2, "branch": 0})  # 最後の after が削除済みの版なら使わない
+        self.assertIsNone(h.head_from_oplog())
+
+
 if __name__ == "__main__":
     unittest.main()

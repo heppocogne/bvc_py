@@ -551,5 +551,62 @@ class TestLarge(helpers.TempDirTestCase):
         self.assertLess(peak_write, limit)
 
 
+class TestM4C(StoreTestCase):
+    # M4-9〜M4-11 で加えたもの: health の異常の記録、verify_all の欠損の記録、peek_manifest、repair_from。
+    compression = "none"
+
+    def test_health_problem_and_rebuild(self):
+        self.repodir.mkdir(exist_ok=True)
+        self.assertEqual(Health(self.repodir).problem, "missing")
+        (self.repodir / "health.json").write_bytes(b"{")
+        h = Health(self.repodir)
+        self.assertEqual(h.problem, "corrupt")
+        h.rebuild()
+        self.assertIsNone(h.problem)
+        h2 = Health(self.repodir)
+        self.assertEqual((h2.problem, h2.records("bad_chunks")), (None, {}))
+
+    def test_verify_all_records_missing_and_length_mismatch(self):
+        sha, _ = self.put(helpers.random_bytes(2500, 30))
+        chunks = self.store.get_manifest(sha).chunks
+        os.remove(self.store.chunk_path(chunks[0].sha))
+        helpers.truncate_file(self.store.chunk_path(chunks[1].sha), 10)
+        res = self.store.verify_all(quick=True)
+        self.assertIn(sha, res.broken_manifests)
+        self.assertTrue(self.store.health.is_bad("bad_chunks", chunks[0].sha))
+        self.assertEqual(self.store.health.records("bad_chunks")[chunks[0].sha]["reason"], "missing")
+        # 1つのマニフェストでは最初の異常で止まるので、長さ違いは別のマニフェストで確かめる
+        m2 = Manifest(size=chunks[1].length, sha256=hashlib.sha256(b"").hexdigest(), chunker=FIXED,
+                      chunks=(chunks[1],))
+        self.store.put_manifest(m2)
+        self.store.verify_all(quick=True)
+        self.assertEqual(self.store.health.records("bad_chunks")[chunks[1].sha]["reason"], "length_mismatch")
+        self.assertIn(chunks[1].sha, self.quarantined())
+
+    def test_peek_manifest_has_no_side_effects(self):
+        sha, _ = self.put(b"abc")
+        self.assertEqual(self.store.peek_manifest(sha), self.store.get_manifest(sha))
+        helpers.flip_byte(self.store.manifest_path(sha))
+        self.assertIsNone(self.store.peek_manifest(sha))
+        self.assertIsNone(self.store.peek_manifest("c" * 64))
+        self.assertEqual((self.quarantined("manifests"), self.store.health.records("bad_manifests")), ([], {}))
+
+    def test_repair_from(self):
+        data = helpers.random_bytes(2500, 31)
+        sha, _ = self.put(data)
+        chunks = self.store.get_manifest(sha).chunks
+        helpers.flip_byte(self.store.chunk_path(chunks[1].sha))
+        self.assertFalse(self.store.manifest_ok(sha, "full"))  # 検出して隔離
+        os.remove(self.store.manifest_path(sha))
+        want_c, want_m = {chunks[1].sha, "d" * 64}, {sha}
+        # 分割方式が違えば見つからない
+        self.assertEqual(self.store.repair_from(io.BytesIO(data), WHOLE, want_c, want_m), (set(), set()))
+        got = self.store.repair_from(io.BytesIO(data), FIXED, want_c, want_m)
+        self.assertEqual(got, ({chunks[1].sha}, {sha}))
+        self.assertTrue(self.store.manifest_ok(sha, "full"))
+        self.assertEqual(self.read(sha), data)
+        self.assertEqual(self.store.health.records("bad_chunks"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

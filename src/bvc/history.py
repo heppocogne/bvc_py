@@ -546,5 +546,96 @@ class History:
                 pass
         return sorted(ids)
 
+    # --- 管理ファイルの自動復旧(M4-10、設計書 4.12節) ---
+    # 検査の関数は、異常の説明(無ければ None)を返す。無い・解析できない・形式が不正な場合だけを異常とし、
+    # 知らない format(UnsupportedFormat)と読み込みの OSError はそのまま送出する(D-15、I-20)。
+
+    def check_branches(self) -> str | None:
+        # branches.json の異常(load の前に呼び出す)。個々の不正な項目は load で読み飛ばす。
+        try:
+            data = load_json(self._bvc_dir / "branches.json", "branches.json")
+        except FileNotFoundError:
+            return "ファイルがありません"
+        except CorruptData as e:
+            return str(e)
+        if not isinstance(data.get("names"), dict):
+            return "branches.json: names が不正です"
+        return None
+
+    def reset_branches(self) -> None:
+        # branches.json を空で作り直す(名前は失われる)。
+        self._write_branches({})
+
+    def check_counters(self) -> str | None:
+        try:
+            data = load_json(self._bvc_dir / "counters.json", "counters.json")
+            check_id(data["next_commit"])
+            check_id(data["next_branch"])
+        except FileNotFoundError:
+            return "ファイルがありません"
+        except CorruptData as e:
+            return str(e)
+        except (KeyError, UnsafePath) as e:
+            return f"counters.json: 内容が不正です({e})"
+        return None
+
+    def rebuild_counters(self) -> dict[str, int]:
+        # 版・削除印・操作ログに現れる最大の番号から counters.json を作り直す(load の後に呼び出す)。
+        # gc で消えた版の番号も、削除印と操作ログに残っているので再利用しない。
+        commit_ids = set(self._commits) | set(self._discarded)
+        branch_ids = {c.branch for c in self._commits.values() if c is not None} | set(self._branches)
+        for r in self._oplog():
+            for v in r.get("created") or ():
+                if type(v) is int and 0 <= v:
+                    commit_ids.add(v)
+            for key in ("before", "after"):
+                h = r.get(key)
+                if isinstance(h, dict):
+                    for field, ids in (("at", commit_ids), ("branch", branch_ids)):
+                        v = h.get(field)
+                        if type(v) is int and 0 <= v:
+                            ids.add(v)
+        counters = {
+            "next_commit": max(commit_ids, default=-1) + 1,
+            "next_branch": max(branch_ids, default=-1) + 1,
+        }
+        atomic_write_json(self._bvc_dir / "counters.json", {"format": 1, **counters}, self._tmp)
+        return counters
+
+    def check_head(self) -> str | None:
+        # HEAD.json の異常。存在しない版・削除済みの版を指している場合も異常とする(load の後に呼び出す)。
+        try:
+            head = self.head()
+        except FileNotFoundError:
+            return "ファイルがありません"
+        except CorruptData as e:
+            return str(e)
+        if head.at not in self._commits:
+            return f"HEAD.json: 存在しない版 {head.at} を指しています"
+        if head.at in self._discarded:
+            return f"HEAD.json: 削除済みの版 {head.at} を指しています"
+        return None
+
+    def head_from_oplog(self) -> Head | None:
+        # 操作ログの最後の after(現在位置の記録)。使えない値なら None。
+        for r in reversed(self._oplog()):
+            after = r.get("after")
+            if not isinstance(after, dict):
+                continue
+            try:
+                head = Head(at=check_id(after.get("at")), branch=check_id(after.get("branch")))
+            except UnsafePath:
+                return None
+            if head.at in self._commits and head.at not in self._discarded:
+                return head
+            return None
+        return None
+
+    def _oplog(self) -> list[dict]:
+        records, warns = read_jsonl(self._bvc_dir / "oplog.jsonl", "oplog.jsonl")
+        for w in warns:
+            logger.warning("%s", w)
+        return records
+
     def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> None:
         raise NotImplementedError("pin は M6 で実装する")

@@ -59,6 +59,8 @@ class Health:
         self.path = repodir / "health.json"
         self.tmpdir = repodir / "tmp"
         self.warnings: list[str] = []
+        # 読み込み時の異常("missing" / "corrupt" / "invalid")。無ければ None。管理ファイルの自動復旧用
+        self.problem: str | None = None
         self._lock = threading.RLock()
         self._data = self._load()
 
@@ -69,13 +71,16 @@ class Health:
         try:
             obj = fsutil.load_json(self.path, "health.json")
         except FileNotFoundError:
+            self.problem = "missing"
             return self._empty()
         except CorruptData:
+            self.problem = "corrupt"
             self.warnings.append("health.json が壊れているため、空として扱います(次の verify で再検出されます)")
             return self._empty()
         try:
             return self._parse(obj)
         except (CorruptData, UnsafePath):
+            self.problem = "invalid"
             self.warnings.append("health.json の内容が不正なため、空として扱います(次の verify で再検出されます)")
             return self._empty()
 
@@ -114,6 +119,12 @@ class Health:
         with self._lock:
             if self._data[kind].pop(key, None) is not None:
                 self._save()
+
+    def rebuild(self) -> None:
+        # 読み込んだ内容(壊れていたときは空)で health.json を書き直す(管理ファイルの自動復旧。設計書 4.12節)。
+        with self._lock:
+            self._save()
+            self.problem = None
 
     def _save(self) -> None:
         fsutil.atomic_write_json(self.path, {"format": fsutil.FORMAT, **self._data}, self.tmpdir)
@@ -520,6 +531,18 @@ class ObjectStore:
         except CorruptData as e:
             raise fail("invalid", e) from e
 
+    def peek_manifest(self, sha: str) -> Manifest | None:
+        # 表示用に、隔離も記録もせずにマニフェストを読む。無い・壊れている・読めないときは None。
+        if self.health.is_bad("bad_manifests", sha):
+            return None
+        try:
+            data = fsutil.read_bytes(self.manifest_path(sha))
+            if _sha256(data) != sha:
+                return None
+            return manifest_from_json(json.loads(data.decode("utf-8")))
+        except (OSError, ValueError, CorruptData):
+            return None
+
     def manifest_ok(self, sha: str, check: str = "exists") -> bool:
         # マニフェストと、その全チャンクが健全か。
         _check_check(check)
@@ -749,15 +772,52 @@ class ObjectStore:
                 continue
             for ref in m.chunks:
                 if ref.sha not in lengths:
+                    # 欠損も記録する(log の ✗ と --repair の対象にするため)。ファイルがあれば隔離済み
+                    if not self.health.is_bad("bad_chunks", ref.sha):
+                        self.quarantine("chunk", ref.sha, "missing")
                     res.broken_manifests[msha] = f"チャンクが欠損・破損: {ref.sha}"
                     break
                 n = lengths[ref.sha]
                 if n is not None and n != ref.length:
+                    # 名前(内容のハッシュ)と長さが両立しないので、チャンクの方が壊れている
+                    self.quarantine("chunk", ref.sha, "length_mismatch")
+                    del lengths[ref.sha]
+                    res.bad_chunks.append(ref.sha)
                     res.broken_manifests[msha] = f"チャンクの長さが一致しない: {ref.sha}"
                     break
             if progress is not None:
                 progress(ProgressEvent("verify_manifests", i, len(manifests)))
         return res
+
+    # --- 修復(verify --repair。設計書 4.9節) ---
+
+    def repair_from(
+        self, f: BinaryIO, chunker: dict, chunks: set[str], manifests: set[str]
+    ) -> tuple[set[str], set[str]]:
+        # ファイル f を chunker で分割し、chunks に含まれるチャンクを保存し直す。
+        # 分割結果のマニフェストの名前が manifests に含まれれば、それも保存し直す。
+        # (保存し直したチャンク, 保存し直したマニフェスト) を返す。
+        # 1回目の読み込みで場所を調べ、2回目に該当する範囲だけを逐次に読んで保存する(メモリ使用量は一定)。
+        m = self.build_manifest(f, chunker)
+        wanted: dict[str, tuple[int, int]] = {}
+        offset = 0
+        for ref in m.chunks:
+            if ref.sha in chunks and ref.sha not in wanted:
+                wanted[ref.sha] = (offset, ref.length)
+            offset += ref.length
+        got_chunks: set[str] = set()
+        for sha, (offset, length) in wanted.items():
+            f.seek(offset)
+            ref, _ = self._put_chunk_stream(_read_range(f, length), None, "full")
+            # 読み直す間にファイルが変わった場合は、別の内容として保存されるだけ(参照されないゴミ)
+            if ref.sha == sha and ref.length == length:
+                got_chunks.add(sha)
+        got_manifests: set[str] = set()
+        msha = manifest_sha(m)
+        if msha in manifests:
+            self.put_manifest(m)
+            got_manifests.add(msha)
+        return got_chunks, got_manifests
 
     def _chunk_quick(self, sha: str) -> tuple[bool, int | None]:
         if not self.has_chunk(sha, "exists"):
@@ -777,3 +837,14 @@ def _file_size(f: BinaryIO) -> int | None:
         return os.fstat(f.fileno()).st_size
     except (AttributeError, OSError, ValueError):
         return None
+
+
+def _read_range(f: BinaryIO, length: int) -> Iterator[bytes]:
+    # 現在位置から length バイトを CHUNK_READ_SIZE ずつ読む(途中で終われば、そこまで)。
+    remaining = length
+    while remaining > 0:
+        piece = f.read(min(CHUNK_READ_SIZE, remaining))
+        if not piece:
+            return
+        remaining -= len(piece)
+        yield piece

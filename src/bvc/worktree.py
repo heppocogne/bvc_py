@@ -224,8 +224,10 @@ class Worktree:
                 and ent["mtime_ns"] == st.st_mtime_ns
                 and ent["mtime_ns"] < index_fs_time - FS_TIME_MARGIN_NS
                 and (
+                    # 保存するときは、再利用するマニフェストとチャンクが健全か確かめる。
+                    # 壊れていれば読み直して保存し直す(設計書 4.11節、C-1)
                     not store_chunks
-                    or self.store.manifest_ok(ent["manifest"], "exists")
+                    or self.store.manifest_ok(ent["manifest"], self.config.commit_verify)
                 )
             ):
                 tree[rel] = ent["manifest"]
@@ -288,7 +290,7 @@ class Worktree:
                         sha, put = self.store.put_file(
                             f,
                             chunker,
-                            self.config.verify_chunks,
+                            self.config.commit_verify,
                             path=rel,
                             compression=compression,
                         )
@@ -339,16 +341,37 @@ class Worktree:
             self._tmp,
         )
 
+    def check_index(self) -> str | None:
+        # index.json の異常("missing" / 理由の文字列)を返す。正常なら None(管理ファイルの自動復旧用)。
+        # 知らない format(UnsupportedFormat)と読み込みの OSError はそのまま送出する(D-15)。
+        if not os.path.lexists(os_path(self._index_file)):
+            return "missing"
+        try:
+            self._read_index()
+        except CorruptData as e:
+            return str(e)
+        return None
+
+    def reset_index(self) -> None:
+        # index.json を空で作り直す。次の走査で全追跡ファイルをハッシュし直す(設計書 4.12節)。
+        atomic_write_json(
+            self._index_file, {"format": 1, "fs_time_ns": 0, "entries": {}}, self._tmp
+        )
+
     def _load_index(self) -> tuple[dict[str, dict], int]:
         # (entries, fs_time_ns) を返す。無い・壊れていれば空(作り直す)。
         # 知らない format(UnsupportedFormat)と読み込みの OSError はそのまま送出する(D-15)。
         try:
-            data = load_json(self._index_file, "index.json")
+            return self._read_index()
         except FileNotFoundError:
             return {}, 0
         except CorruptData as e:
             logger.warning("%s(作り直します)", e)
             return {}, 0
+
+    def _read_index(self) -> tuple[dict[str, dict], int]:
+        # index.json を読んで検査する。無ければ FileNotFoundError、壊れていれば CorruptData。
+        data = load_json(self._index_file, "index.json")
         fs_time_ns = data.get("fs_time_ns")
         entries = data.get("entries")
         out: dict[str, dict] = {}
@@ -368,8 +391,7 @@ class Worktree:
                     ok = False
                     break
         if not ok:
-            logger.warning("index.json: 内容が不正です(作り直します)")
-            return {}, 0
+            raise CorruptData("index.json: 内容が不正です")
         return out, fs_time_ns
 
     # --- 名前変更の検知(M4-5, M4-6、設計書 4.3節、仕様書 2.6節) ---
@@ -563,6 +585,47 @@ class Worktree:
         except OSError:
             return None
         return h.hexdigest()
+
+    # --- 修復の候補(verify --repair。設計書 4.9節) ---
+
+    def repair_candidates(self, names: Collection[str], sizes: Collection[int]) -> list[str]:
+        # 修復の材料にするファイル(作業フォルダからの相対パス。実際の名前)を返す。
+        # 追跡ファイルすべてと、追跡対象外の通常ファイルのうち、ファイル名(大文字小文字を問わない)が
+        # names のどれかと一致するもの、またはサイズが sizes のどれかと一致するもの。
+        # リンクはたどらず、.bvc と読めないフォルダは飛ばす。
+        tracked = self._scan()
+        untracked: list[str] = []
+        seen = {rel.casefold() for rel in tracked}
+        names_fold = {n.casefold() for n in names}
+        size_set = set(sizes)
+        stack = [""]
+        while stack:
+            rel_dir = stack.pop()
+            dir_path = self.workdir / rel_dir if rel_dir else self.workdir
+            try:
+                with os.scandir(os_path(dir_path)) as it:
+                    entries = sorted(it, key=lambda e: e.name)
+            except OSError:
+                continue
+            for e in entries:
+                if not rel_dir and e.name.casefold() == ".bvc":
+                    continue
+                rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_link_or_reparse(st):
+                    continue
+                if stat.S_ISDIR(st.st_mode):
+                    stack.append(rel)
+                elif (
+                    stat.S_ISREG(st.st_mode)
+                    and unicodedata.normalize("NFC", rel).casefold() not in seen
+                    and (e.name.casefold() in names_fold or st.st_size in size_set)
+                ):
+                    untracked.append(rel)
+        return [tracked[rel] for rel in sorted(tracked)] + sorted(untracked)
 
     def _mark_fs_time(self) -> int:
         # .bvc/tmp に空の目印ファイルを作り、その更新日時を読んで消す(設計書 2.5節、I-14)。

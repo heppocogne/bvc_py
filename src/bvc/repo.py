@@ -34,12 +34,14 @@ from .model import (
     GcReport,
     Head,
     LogEntry,
+    Manifest,
     MoveResult,
     Note,
     ProgressEvent,
+    VerifyReport,
     WorkState,
 )
-from .store import ObjectStore, ProgressFn
+from .store import HEALTH_KINDS, ObjectStore, ProgressFn
 from .worktree import Worktree
 
 logger = logging.getLogger(__name__)
@@ -77,11 +79,6 @@ def _missing_error(state: WorkState) -> MissingFiles:
     )
 
 
-def _no_skip_broken(skip_broken: bool) -> None:
-    if skip_broken:
-        raise UsageError("壊れた版を飛ばす移動(--skip-broken)は M4 で実装します")
-
-
 def _head_json(head: Head) -> dict:
     return {"at": head.at, "branch": head.branch}
 
@@ -97,6 +94,19 @@ def _op_entry(op: str, args: dict, head: Head) -> dict:
         "created": [],
         "result": "ok",
     }
+
+
+def _load_config(bvc_dir: Path) -> dict:
+    # config.json は自動復旧しない(仕様書 2.9節)。無い・壊れている場合は、修正方法を案内して中止する。
+    try:
+        return load_json(bvc_dir / "config.json", "config.json")
+    except (FileNotFoundError, CorruptData) as e:
+        reason = "ファイルがありません" if isinstance(e, FileNotFoundError) else str(e)
+        example = '{"format": 1, "track": ["*.bin"]}'
+        raise BvcError(
+            f"設定ファイルを読み込めません({reason})。config.json は自動では復旧しません。\n"
+            f"  {bvc_dir / 'config.json'} を修正してください(最小の例: {example})"
+        ) from e
 
 
 def _check_name(name: str) -> str:
@@ -162,10 +172,10 @@ def parse_config(data: dict) -> Config:
         if "compression" in r:
             check_compression(r["compression"], f"{where}.compression")
 
-    verify_chunks = data.get("verify_chunks", "exists")
-    if verify_chunks not in ("exists", "full"):
+    commit_verify = data.get("commit_verify", "exists")
+    if commit_verify not in ("exists", "full"):
         raise _config_error(
-            f"verify_chunks は exists か full にしてください: {verify_chunks!r}"
+            f"commit_verify は exists か full にしてください: {commit_verify!r}"
         )
     threads = data.get("threads", 0)
     if type(threads) is not int or threads < 0:
@@ -182,7 +192,7 @@ def parse_config(data: dict) -> Config:
         rules=list(rules),
         chunker=chunker,
         compression=compression,
-        verify_chunks=verify_chunks,
+        commit_verify=commit_verify,
         rename_threshold=float(rename_threshold),
         threads=threads,
     )
@@ -236,7 +246,7 @@ class Repo:
             "rules": [],
             "chunker": chunker or dict(DEFAULT_CHUNKER),
             "compression": compression,
-            "verify_chunks": "exists",
+            "commit_verify": "exists",
             "rename_threshold": 0.5,
             "threads": 0,
         }
@@ -317,16 +327,104 @@ class Repo:
         lock.acquire()
         repo: Repo | None = None
         try:
-            config = parse_config(load_json(bvc_dir / "config.json", "config.json"))
-            repo = cls(workdir, config, lock)
-            repo._worktree.recover(repo._history.set_head)
-            repo._history.load()
+            try:
+                config = parse_config(_load_config(bvc_dir))
+                repo = cls(workdir, config, lock)
+                repo._worktree.recover(repo._history.set_head)
+                repo._recover_control()
+            except OSError as e:
+                # 読み込み自体の失敗(使用中など)は破損の証拠ではないので、何も変えずに中止する(D-15、I-20)
+                raise FileBusy(
+                    f"管理ファイルを読み込めません(他のアプリが使用中の可能性があります): {e}"
+                ) from e
         except BaseException:
             if repo is not None:
                 repo._store.close()
             lock.release()
             raise
         return repo
+
+    def _recover_control(self) -> None:
+        # 管理ファイルを検査し、無い・解析できない・形式が不正なものを自動で作り直す(M4-10、設計書 4.12節)。
+        # 作業ファイルは変えない。作り直したら警告を出し、oplog に recover_control を記録する。
+        h, wt = self._history, self._worktree
+        recovered: list[dict] = []
+
+        def note(file: str, problem: str, action: str) -> None:
+            logger.warning("%s を自動で復旧しました: %s(%s)", file, action, problem)
+            recovered.append({"file": file, "problem": problem, "action": action})
+
+        # branches.json は load の中で読むので、先に直しておく
+        problem = h.check_branches()
+        if problem is not None:
+            h.reset_branches()
+            note("branches.json", problem, "ブランチ名を失ったため、空で作り直しました")
+        h.load()
+
+        problem = h.check_counters()
+        if problem is not None:
+            c = h.rebuild_counters()
+            note(
+                "counters.json",
+                problem,
+                f"版・削除印・操作ログから再計算しました(次の版 {c['next_commit']}、次のブランチ {c['next_branch']})",
+            )
+
+        problem = h.check_head()
+        if problem is not None:
+            head, how = self._guess_head()
+            h.set_head(head)
+            note("HEAD.json", problem, f"{how}から現在位置を版 {head.at} にしました")
+
+        problem = wt.check_index()
+        if problem is not None:
+            wt.reset_index()
+            note("index.json", problem, "空で作り直しました(次の操作で全追跡ファイルをハッシュし直します)")
+
+        health = self._store.health
+        if health.problem is not None:
+            problem = {"missing": "ファイルがありません"}.get(health.problem, health.problem)
+            health.rebuild()
+            note("health.json", problem, "空で作り直しました(壊れたデータは次の verify で再検出されます)")
+
+        if recovered:
+            head = h.head()
+            for r in recovered:
+                h.log_op(
+                    {
+                        "op": "recover_control",
+                        "args": r,
+                        "reason": "",
+                        "before": None,
+                        "after": _head_json(head),
+                        "created": [],
+                        "result": "ok",
+                    }
+                )
+
+    def _guess_head(self) -> tuple[Head, str]:
+        # HEAD.json が使えないときの現在位置(設計書 4.12節): 操作ログの最後の after →
+        # 作業ファイルと内容が一致する版 → 最新の版、の順に決める。作業ファイルは変えない。
+        h = self._history
+        head = h.head_from_oplog()
+        if head is not None:
+            return head, "操作ログ"
+        living = [c for c in h.living() if h.tree_known(c.id)]
+        if not living:
+            raise BvcError(
+                "HEAD.json を復旧できません(読み込める版がありません)。.bvc/commits を確認してください"
+            )
+        tree = self._worktree.state(base_tree={}, store_chunks=False, find_hints=False).tree
+        for c in living:  # 新しい順
+            if c.tree == tree:
+                return Head(c.id, c.branch), "作業ファイルと内容が一致する版"
+        c = living[0]
+        logger.warning(
+            "作業ファイルと内容が一致する版が見つからないため、最新の版 %d を現在位置にしました。"
+            "作業ファイルは変えていません(未コミットの変更として扱われます)",
+            c.id,
+        )
+        return Head(c.id, c.branch), "最新の版"
 
     def close(self) -> None:
         # ロックを解放する(M2-10)。
@@ -436,14 +534,18 @@ class Repo:
         progress: ProgressFn | None = None,
     ) -> MoveResult:
         # 親の版(effective_parent)へ移動する。現在のブランチ(redo の方向)は変えない。
-        _no_skip_broken(skip_broken)
-        head = self._history.head()
-        target = self._history.effective_parent(head.at)
+        # skip_broken なら、壊れた版を飛ばして親の方向で最も近い健全な版へ移動する(設計書 4.11節)。
+        h = self._history
+        head = h.head()
+        target = h.effective_parent(head.at)
         if target is None:
             raise CannotMove(
                 f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at
             )
-        return self._move("undo", "", reason, target, None, allow_missing, progress)
+        target, skipped = self._skip_broken("undo", target, skip_broken, h.effective_parent)
+        return self._move(
+            "undo", "", reason, target, None, allow_missing, progress, skipped=skipped
+        )
 
     def redo(
         self,
@@ -453,35 +555,81 @@ class Repo:
         progress: ProgressFn | None = None,
     ) -> MoveResult:
         # 現在のブランチの先端へ向かって1つ進む。経路上に無ければ、子が1つのときだけ進む。
-        _no_skip_broken(skip_broken)
+        # skip_broken なら、壊れた版を飛ばして同じ方向で最も近い健全な版へ移動する(設計書 4.11節)。
         h = self._history
         head = h.head()
         path = h.path_to_tip(head.branch)
-        if head.at in path:
-            idx = path.index(head.at)
-            if idx == 0:
+
+        def forward(cur: int) -> int | None:
+            # cur から先端方向へ1つ進んだ版(無ければ None)。子が複数で決められなければ CannotMove。
+            if cur in path:
+                idx = path.index(cur)
+                return path[idx - 1] if idx > 0 else None
+            kids = h.children(cur)
+            if len(kids) > 1:
                 raise CannotMove(
-                    f"版 {head.at} はブランチの先端なので、これ以上進めません",
-                    at=head.at,
+                    f"版 {cur} には子が複数あるため、進む先を決められません。"
+                    f"goto で版を指定してください(候補: {', '.join(map(str, kids))})",
+                    at=cur,
+                    candidates=kids,
                 )
-            return self._move(
-                "redo", "", reason, path[idx - 1], head.branch, allow_missing, progress
-            )
-        kids = h.children(head.at)
-        if not kids:
+            return kids[0] if kids else None
+
+        target = forward(head.at)
+        if target is None:
             raise CannotMove(
-                f"版 {head.at} は先端(子の無い版)なので、これ以上進めません", at=head.at
-            )
-        if len(kids) > 1:
-            raise CannotMove(
-                f"版 {head.at} には子が複数あるため、進む先を決められません。"
-                f"goto で版を指定してください(候補: {', '.join(map(str, kids))})",
+                f"版 {head.at} はブランチの先端(子の無い版)なので、これ以上進めません",
                 at=head.at,
-                candidates=kids,
             )
-        self._check_movable(kids[0])
+        target, skipped = self._skip_broken("redo", target, skip_broken, forward)
+        # 経路上ならブランチはそのまま、経路の外なら移動先の版のブランチにする
+        branch = head.branch if target in path else h.get(target).branch
         return self._move(
-            "redo", "", reason, kids[0], h.get(kids[0]).branch, allow_missing, progress
+            "redo", "", reason, target, branch, allow_missing, progress, skipped=skipped
+        )
+
+    def _skip_broken(
+        self,
+        op: str,
+        target: int,
+        skip_broken: bool,
+        step: Callable[[int], int | None],
+    ) -> tuple[int, list[int]]:
+        # 移動先が壊れた版なら、skip_broken でなければ BrokenVersion で中止する(何も変えない)。
+        # skip_broken なら step で同じ方向へたどり、最初の健全な版と、飛ばした版の一覧を返す。
+        skipped: list[int] = []
+        cur: int | None = target
+        while cur is not None and not self._is_healthy(cur):
+            if not skip_broken:
+                raise BrokenVersion(
+                    f"移動先の版 {cur} は壊れているため移動できません(作業ファイルは変えていません)。"
+                    f"壊れた版を飛ばすには {op} --skip-broken を指定してください",
+                    commit=cur,
+                )
+            skipped.append(cur)
+            try:
+                cur = step(cur)
+            except CannotMove as e:
+                raise BrokenVersion(
+                    f"版 {', '.join(map(str, skipped))} は壊れています。{e}", commit=skipped[0]
+                ) from None
+        if cur is None:
+            raise BrokenVersion(
+                f"{'親' if op == 'undo' else '先端'}の方向に健全な版がありません"
+                f"(壊れた版: {', '.join(map(str, skipped))})。作業ファイルは変えていません",
+                commit=skipped[0],
+            )
+        return cur, skipped
+
+    def _is_healthy(self, commit_id: int) -> bool:
+        # 版を復元できる見込みがあるか(版ファイルが読めて tree が正しく、全マニフェストとチャンクが揃っている)。
+        # チャンクの中身までは読まない(展開時に照合する)。見つかった異常は隔離して記録される。
+        h = self._history
+        if not h.exists(commit_id) or h.is_broken(commit_id):
+            return False
+        return all(
+            self._store.manifest_ok(sha, "exists")
+            for sha in sorted(set(h.get(commit_id).tree.values()))
         )
 
     def goto(
@@ -542,6 +690,7 @@ class Repo:
         progress: ProgressFn | None,
         args: dict | None = None,
         on_done: Callable[[], None] | None = None,
+        skipped: list[int] | None = None,
     ) -> MoveResult:
         # 移動系の共通手順(設計書 4.1節)。移動先は呼び出し側が自動コミットの前に決めておく。
         # branch が None なら、移動後もそのときの HEAD.branch(自動コミットがあればそのブランチ)を保つ。
@@ -590,7 +739,11 @@ class Repo:
         after = Head(target_id, current.branch if branch is None else branch)
         entry = {
             "op": op,
-            "args": {**(args or {}), "allow_missing": allow_missing},
+            "args": {
+                **(args or {}),
+                "allow_missing": allow_missing,
+                **({"skipped": skipped} if skipped else {}),
+            },
             "reason": reason,
             "before": _head_json(head),
             "created": [auto.id] if auto is not None else [],
@@ -622,6 +775,7 @@ class Repo:
             auto_commit=auto,
             restored=res.written,
             deleted=res.deleted,
+            skipped=list(skipped or []),
         )
 
     def resolve(self, rev: str) -> int:
@@ -635,6 +789,7 @@ class Repo:
         h = self._history
         head = h.head()
         pinned = h.pinned_ids()
+        data_broken = self._recorded_broken()
         entries = []
         for cid in h.ids(include_discarded):
             c = h.get(cid) if h.is_readable(cid) else None
@@ -647,7 +802,7 @@ class Repo:
                     branch_label=h.branch_name(c.branch) if is_tip else None,
                     is_tip=is_tip,
                     is_current=cid == head.at,
-                    broken=h.is_broken(cid),
+                    broken=h.is_broken(cid) or (c is not None and data_broken(c)),
                     discarded=h.is_discarded(cid),
                     pinned=cid in pinned,
                     notes=h.get_notes(cid),
@@ -656,6 +811,32 @@ class Repo:
         if limit is not None:
             entries = entries[:limit]
         return entries
+
+    def _recorded_broken(self) -> Callable[[Commit], bool]:
+        # 健全性の記録(health)から、版が壊れたデータを参照しているかを判定する関数を返す(M4-11)。
+        # 表示用なので、マニフェストは隔離も記録もせずに読む(記録されていない異常は verify で見つける)。
+        store = self._store
+        bad_manifests = set(store.health.records("bad_manifests"))
+        bad_chunks = set(store.health.records("bad_chunks"))
+        cache: dict[str, bool] = {}
+
+        def manifest_bad(sha: str) -> bool:
+            if sha not in cache:
+                if sha in bad_manifests:
+                    cache[sha] = True
+                elif not bad_chunks:
+                    cache[sha] = False
+                else:
+                    m = store.peek_manifest(sha)
+                    cache[sha] = m is not None and any(r.sha in bad_chunks for r in m.chunks)
+            return cache[sha]
+
+        def broken(c: Commit) -> bool:
+            if not bad_manifests and not bad_chunks:
+                return False
+            return any(manifest_bad(sha) for sha in set(c.tree.values()))
+
+        return broken
 
     # --- 履歴操作(M4-1〜M4-4) ---
 
@@ -947,6 +1128,160 @@ class Repo:
             }
         )
         return report
+
+    # --- 検証と修復(M4-9、仕様書 3.10節、設計書 4.9節) ---
+
+    def verify(
+        self,
+        quick: bool = False,
+        repair: bool = False,
+        progress: ProgressFn | None = None,
+    ) -> VerifyReport:
+        # 全チャンク・全マニフェストを検証し、生きている版(と pin された版)が復元できるかを調べる。
+        # 見つけた異常は隔離し、health.json に記録する。repair なら、壊れたチャンク・マニフェストを
+        # 作業フォルダのファイルから作り直す。異常が残っていても例外にはせず、report.ok で返す。
+        h, s = self._history, self._store
+        before = {k: s.health.records(k) for k in HEALTH_KINDS}
+        res = s.verify_all(quick=quick, progress=progress)
+        report = VerifyReport(
+            changed=False,
+            quick=quick,
+            repair=repair,
+            checked_chunks=res.checked_chunks,
+            checked_manifests=res.checked_manifests,
+        )
+        pinned = h.pinned_ids()
+        kept = [c for c in h.ids(include_discarded=True) if not h.is_discarded(c) or c in pinned]
+        report.checked_commits = len(kept)
+
+        # 版ファイルの状態を記録する(読めるようになったものは記録から消す)
+        for cid in h.ids(include_discarded=True):
+            key = str(cid)
+            if h.tree_known(cid):
+                s.health.clear("bad_commits", key)
+            elif not s.health.is_bad("bad_commits", key):
+                reason = "unreadable" if not h.is_readable(cid) else "invalid_tree"
+                s.health.mark("bad_commits", key, reason)
+
+        broken, bad_chunks, bad_manifests, manifests = self._check_versions(kept)
+        if repair and (bad_chunks or bad_manifests):
+            chunks_done, manifests_done = self._repair(
+                kept, bad_chunks, bad_manifests, manifests, progress
+            )
+            report.repaired_chunks = sorted(chunks_done)
+            report.repaired_manifests = sorted(manifests_done)
+            if chunks_done or manifests_done:
+                broken, bad_chunks, bad_manifests, _ = self._check_versions(kept)
+        report.broken_commits = sorted(broken)
+        report.bad_chunks = sorted(bad_chunks)
+        report.bad_manifests = sorted(bad_manifests)
+        report.changed = bool(
+            report.repaired_chunks
+            or report.repaired_manifests
+            or before != {k: s.health.records(k) for k in HEALTH_KINDS}
+        )
+        h.log_op(
+            {
+                **_op_entry("verify", {"quick": quick, "repair": repair}, h.head()),
+                "broken": report.broken_commits,
+                "repaired": {
+                    "chunks": len(report.repaired_chunks),
+                    "manifests": len(report.repaired_manifests),
+                },
+            }
+        )
+        return report
+
+    def _check_versions(
+        self, ids: list[int]
+    ) -> tuple[set[int], set[str], set[str], dict[str, Manifest]]:
+        # 版を復元できるかを調べる。(壊れた版, 欠損・破損チャンク, 欠損・破損マニフェスト,
+        # 読めたマニフェスト) を返す。チャンク・マニフェストは ids の版から参照されるものだけ。
+        # 記録されていない欠損は、get_manifest が隔離記録する(チャンクの欠損は verify_all が記録済み)。
+        h, s = self._history, self._store
+        broken: set[int] = set()
+        bad_chunks: set[str] = set()
+        bad_manifests: set[str] = set()
+        manifests: dict[str, Manifest] = {}
+        chunk_ok: dict[str, bool] = {}
+        for cid in ids:
+            if not h.tree_known(cid):
+                broken.add(cid)
+                continue
+            for sha in sorted(set(h.get(cid).tree.values())):
+                if sha not in manifests and sha not in bad_manifests:
+                    try:
+                        manifests[sha] = s.get_manifest(sha)
+                    except CorruptData:
+                        bad_manifests.add(sha)
+                if sha in bad_manifests:
+                    broken.add(cid)
+                    continue
+                for ref in manifests[sha].chunks:
+                    if ref.sha not in chunk_ok:
+                        chunk_ok[ref.sha] = s.has_chunk(ref.sha, "exists")
+                    if not chunk_ok[ref.sha]:
+                        bad_chunks.add(ref.sha)
+                        broken.add(cid)
+        return broken, bad_chunks, bad_manifests, manifests
+
+    def _repair(
+        self,
+        ids: list[int],
+        bad_chunks: set[str],
+        bad_manifests: set[str],
+        manifests: dict[str, Manifest],
+        progress: ProgressFn | None,
+    ) -> tuple[set[str], set[str]]:
+        # 作業フォルダのファイルを分割し、壊れたチャンク・マニフェストと同じものがあれば保存し直す。
+        # 材料: 追跡ファイルと、追跡対象外で「壊れた版に記録されたファイル名」か「そのファイルのサイズ」が
+        # 一致するファイル。分割方式は、設定のもの(rules を含む)と、読めたマニフェストに記録されたもの。
+        h, s = self._history, self._store
+        want_chunks, want_manifests = set(bad_chunks), set(bad_manifests)
+        names: set[str] = set()
+        sizes: set[int] = set()
+        for cid in ids:
+            if not h.tree_known(cid):
+                continue
+            for path, sha in h.get(cid).tree.items():
+                m = manifests.get(sha)
+                if sha in want_manifests or (
+                    m is not None and any(r.sha in want_chunks for r in m.chunks)
+                ):
+                    names.add(path.rpartition("/")[2])
+                    if m is not None:
+                        sizes.add(m.size)
+        specs: dict[bytes, dict] = {}
+        rule_chunkers = [r["chunker"] for r in self.config.rules if "chunker" in r]
+        for ck in [self.config.chunker, *rule_chunkers, *(m.chunker for m in manifests.values())]:
+            specs.setdefault(fsutil.canonical_json(ck), ck)
+
+        done_chunks: set[str] = set()
+        done_manifests: set[str] = set()
+        files = self._worktree.repair_candidates(names, sizes)
+        for i, rel in enumerate(files, 1):
+            if not want_chunks and not want_manifests:
+                break
+            try:
+                with open(fsutil.os_path(self.workdir / rel), "rb") as f:
+                    for spec in specs.values():
+                        try:
+                            got_c, got_m = s.repair_from(f, spec, want_chunks, want_manifests)
+                        except ValueError:
+                            continue  # 記録された分割方式が使えない(不明な名前など)
+                        finally:
+                            f.seek(0)
+                        done_chunks |= got_c
+                        done_manifests |= got_m
+                        want_chunks -= got_c
+                        want_manifests -= got_m
+                        if not want_chunks and not want_manifests:
+                            break
+            except OSError as e:
+                logger.warning("修復の材料にできませんでした(%s): %s", e, rel)
+            if progress is not None:
+                progress(ProgressEvent("repair", i, len(files), rel))
+        return done_chunks, done_manifests
 
     def _tmp_files(self) -> list[Path]:
         # tmp/ の残骸(ロック中なので、書き込み途中のものは無い)。

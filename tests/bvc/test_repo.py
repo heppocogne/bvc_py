@@ -1,6 +1,6 @@
-# repo の単体テスト(M2-2, M2-10, M3-6, M3-7, M4-1〜M4-6)。
+# repo の単体テスト(M2-2, M2-10, M3-6, M3-7, M4-1〜M4-11)。
 # 観点: F-1, F-2, F-3, F-4, F-6, F-7, F-8, F-9, F-12, F-14, P-5, P-7, P-8, P-9,
-#       R-1, R-2, R-4, R-6, R-7, R-8, R-9, R-10, R-11, C-3, C-8。
+#       R-1, R-2, R-4, R-6, R-7, R-8, R-9, R-10, R-11, C-1〜C-8, C-10, C-11。
 
 import json
 import os
@@ -25,6 +25,7 @@ from bvc.errors import (
     PinnedCommit,
     RevisionError,
     SafetyAbort,
+    UnsupportedFormat,
     UsageError,
 )
 from bvc.model import BranchInfo, Head
@@ -111,7 +112,7 @@ class TestConfig(unittest.TestCase):
     def test_i17_invalid_values(self):
         base = {"format": 1, "track": ["*"]}
         for patch in ({"track": "x"}, {"ignore": [1]}, {"chunker": {"name": "nope"}},
-                      {"compression": "x"}, {"threads": -1}, {"verify_chunks": "x"},
+                      {"compression": "x"}, {"threads": -1}, {"commit_verify": "x"},
                       {"rules": [{"chunker": {"name": "whole"}}]},
                       {"rules": [{"pattern": "*", "compression": "x"}]},
                       {"rename_threshold": 0}, {"rename_threshold": 1.5},
@@ -458,11 +459,6 @@ class TestUndoRedoGoto(MoveTestCase):
         with self.assertRaises(CannotMove) as cm:
             repo.redo()
         self.assertEqual(cm.exception.details["candidates"], [1, 2])
-
-    def test_skip_broken_not_yet_supported(self):
-        repo = self.build_linear(1)
-        with self.assertRaises(UsageError):
-            repo.undo(skip_broken=True)
 
     def test_p7_case_only_rename_roundtrip(self):
         self.write("a.bin", b"1")
@@ -1271,6 +1267,505 @@ class TestRenameDetection(RepoTestCase):
         self.write("b.bin", self.blocks("x", "x", "x", "b"))
         r = repo.goto("0")
         self.assertEqual(r.auto_commit.renames, (("a.bin", "b.bin", 0.75),))
+
+
+# ---------------------------------------------------------------------------
+# M4-C 破損時の処理(M4-7〜M4-11)
+# ---------------------------------------------------------------------------
+
+# チャンクファイルの壊し方(設計書 7節)。圧縮なし(codec 0)のチャンクに使う
+DAMAGES = {
+    "delete": lambda p: p.unlink(),
+    "flip": helpers.flip_byte,
+    "truncate": lambda p: helpers.truncate_file(p, 1),   # ヘッダだけ残す
+    "codec": lambda p: helpers.set_first_byte(p, 1),     # raw → zlib(既知の ID で復号できない)
+}
+
+
+class CorruptionTestCase(MoveTestCase):
+    def manifest_of(self, repo, cid, rel="a.bin"):
+        return repo._history.get(cid).tree[rel]
+
+    def chunk_of(self, repo, cid, rel="a.bin"):
+        # 版 cid の rel の最初のチャンクのファイル
+        m = repo._store.get_manifest(self.manifest_of(repo, cid, rel))
+        return repo._store.chunk_path(m.chunks[0].sha)
+
+    def set_config(self, repo, **values):
+        path = repo.bvc_dir / "config.json"
+        cfg = json.loads(path.read_text("utf-8"))
+        cfg.update(values)
+        path.write_text(json.dumps(cfg), "utf-8")
+        return self.reopen(repo)
+
+    def make_old(self, rel):
+        # stat キャッシュが使われるように、更新日時を十分に古くする(設計書 4.2節)
+        t = time.time() - 100
+        os.utime(self.tmp / rel, (t, t))
+
+    def quarantined(self, repo, kind="chunks"):
+        return sorted(p.name for p in (repo.bvc_dir / "quarantine" / kind).glob("*"))
+
+
+class TestCommitVerify(CorruptionTestCase):
+    # M4-7: コミット時の検査(C-1, C-10、設計書 4.11節)。
+
+    def build(self, commit_verify):
+        # 版 0: a.bin(変更しない。stat キャッシュを通る)と b.bin
+        self.write("a.bin", b"A" * 100)
+        self.write("b.bin", b"B0")
+        self.make_old("a.bin")
+        repo = self.init(["*.bin"], compression="none")
+        repo = self.set_config(repo, commit_verify=commit_verify)
+        self.assertEqual(repo.config.commit_verify, commit_verify)
+        return repo
+
+    def assert_restorable(self, repo, expected):
+        for cid, files in expected.items():
+            repo.goto(str(cid))
+            self.assertEqual(self.files(), files)
+        self.assertTrue(repo.verify().ok)
+
+    def test_c1_damaged_chunk_of_unchanged_file_is_rebuilt_with_full(self):
+        for name, damage in DAMAGES.items():
+            with self.subTest(damage=name):
+                helpers.remove_tree(self.tmp)
+                self.tmp.mkdir()
+                repo = self.build("full")
+                damage(self.chunk_of(repo, 0))
+                self.write("b.bin", b"B1")
+                r = repo.commit("edit")
+                # 新しい版は壊れたデータを参照しない。同じ内容なので、壊れていた版 0 も直る
+                self.assertEqual(r.state.modified, ["b.bin"])
+                self.assert_restorable(repo, {0: {"a.bin": b"A" * 100, "b.bin": b"B0"},
+                                              1: {"a.bin": b"A" * 100, "b.bin": b"B1"}})
+                repo.close()
+
+    def test_c1_missing_or_quarantined_chunk_is_rebuilt_with_exists(self):
+        # exists でも、欠損と隔離済み(以前に検出したもの)は作り直す
+        repo = self.build("exists")
+        self.chunk_of(repo, 0).unlink()
+        self.write("b.bin", b"B1")
+        repo.commit("1")
+        self.assertTrue(repo._store.has_chunk(self.chunk_of(repo, 1).name, "full"))
+
+        helpers.flip_byte(self.chunk_of(repo, 1))
+        self.assertFalse(repo.verify().ok)  # 検出して隔離する
+        self.write("b.bin", b"B2")
+        repo.commit("2")
+        self.assert_restorable(repo, {1: {"a.bin": b"A" * 100, "b.bin": b"B1"},
+                                      2: {"a.bin": b"A" * 100, "b.bin": b"B2"}})
+
+    def test_c1_changed_file_rebuilds_its_chunks(self):
+        # 変更のあったファイルも、保存済みのチャンクが欠けていれば作り直す(put_file の has_chunk)
+        repo = self.build("exists")
+        self.write("b.bin", b"B1")
+        repo.commit()
+        victim = self.chunk_of(repo, 0, "b.bin")
+        victim.unlink()
+        self.write("b.bin", b"B0")  # 版 0 と同じ内容
+        repo.commit()
+        self.assertTrue(victim.exists())
+        self.assert_restorable(repo, {0: {"a.bin": b"A" * 100, "b.bin": b"B0"}})
+
+    def test_c10_exists_misses_latent_corruption(self):
+        # exists は中身を読まないので、ビット化けは見逃す(既定値の限界)。full と verify では検出する
+        repo = self.build("exists")
+        victim = self.chunk_of(repo, 0)
+        helpers.flip_byte(victim)
+        self.write("b.bin", b"B1")
+        repo.commit()
+        self.assertTrue(victim.exists())  # 見逃して、新しい版が壊れたチャンクを参照している
+        self.assertEqual(repo.verify(quick=True).broken_commits, [])
+        self.assertEqual(repo.verify().broken_commits, [0, 1])
+        # 検出後の commit は作り直す
+        self.write("b.bin", b"B2")
+        repo.commit()
+        self.assertEqual(repo.verify().broken_commits, [])
+
+        repo = self.set_config(repo, commit_verify="full")
+        helpers.flip_byte(self.chunk_of(repo, 2))
+        self.write("b.bin", b"B3")
+        repo.commit()
+        # 同じチャンクを2回隔離した(2回目は別名で残す)
+        self.assertEqual([n[:64] for n in self.quarantined(repo)], [victim.name] * 2)
+        self.assertTrue(repo.verify().ok)
+
+
+class TestSkipBroken(CorruptionTestCase):
+    # M4-8: 壊れた版への移動(C-2、仕様書 3.4節、設計書 4.11節)。
+
+    def build(self):
+        # 版 0..7(a.bin = v<番号>)。4 と 6 を削除して 7 ← 5 ← 3 にし、版 5 のマニフェストを壊す。@ = 7
+        repo = self.build_linear(7)
+        repo.discard("4")
+        repo.discard("6")
+        helpers.flip_byte(repo._store.manifest_path(self.manifest_of(repo, 5)))
+        return repo
+
+    def test_c2_undo_redo_goto(self):
+        repo = self.build()
+        n_commits = len(commit_files(repo.bvc_dir))
+        self.write("a.bin", b"edit")
+        with self.assertRaises(BrokenVersion) as cm:
+            repo.undo()
+        self.assertIn("--skip-broken", str(cm.exception))
+        # 作業ファイルも HEAD も変えず、自動コミットも作らない
+        self.assertEqual((self.head(repo), self.files()), (Head(7, 0), {"a.bin": b"edit"}))
+        self.assertEqual(len(commit_files(repo.bvc_dir)), n_commits)
+
+        self.write("a.bin", b"v7")
+        r = repo.undo(skip_broken=True)
+        self.assertEqual((r.after, r.skipped), (Head(3, 0), [5]))
+        self.assertEqual(self.files(), {"a.bin": b"v3"})
+        self.assertEqual(self.oplog(repo)[-1]["args"]["skipped"], [5])
+
+        with self.assertRaises(BrokenVersion):
+            repo.redo()
+        self.assertEqual(self.files(), {"a.bin": b"v3"})
+        r = repo.redo(skip_broken=True)
+        self.assertEqual((r.after, r.skipped), (Head(7, 0), [5]))
+        self.assertEqual(self.files(), {"a.bin": b"v7"})
+
+        with self.assertRaises(BrokenVersion):
+            repo.goto("5")
+        repo.goto("3")  # 途中の版が壊れていても、健全な版へは直接移動できる
+        self.assert_clean_at(repo, 3)
+
+    def test_skip_with_auto_commit(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        r = repo.undo(skip_broken=True)
+        self.assertEqual((r.auto_commit.id, r.after.at, r.skipped), (8, 3, [5]))
+        # redo で壊れた版を飛ばして、編集内容(自動コミット)へ戻れる
+        self.assertEqual(repo.redo(skip_broken=True).after.at, 7)
+        repo.redo()
+        self.assertEqual(self.files(), {"a.bin": b"edit"})
+
+    def test_no_healthy_version_in_the_direction(self):
+        repo = self.build_linear(2)
+        for cid in (0, 1):
+            helpers.flip_byte(repo._store.manifest_path(self.manifest_of(repo, cid)))
+        with self.assertRaises(BrokenVersion) as cm:
+            repo.undo(skip_broken=True)
+        self.assertIn("健全な版がありません", str(cm.exception))
+        self.assert_clean_at(repo, 2)
+        repo.goto("2")
+        with self.assertRaises(CannotMove):  # 根での undo は skip_broken でも終了コード 4
+            repo._history.set_head(Head(0, 0))
+            repo.undo(skip_broken=True)
+
+    def test_unreadable_version_is_skipped(self):
+        repo = self.build_linear(3)
+        repo.close()
+        helpers.break_json(self.tmp / ".bvc" / "commits" / "2.json")
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        with self.assertRaises(BrokenVersion):
+            repo.undo()
+        self.assertEqual(repo.undo(skip_broken=True).skipped, [2])
+        self.assert_clean_at(repo, 1)
+        # 経路の外(読み込み不可の版のブランチは分からない)でも、子が1つなら飛ばして進める
+        self.assertEqual(repo.redo(skip_broken=True).after.at, 3)
+
+    def test_corruption_found_in_staging(self):
+        # 事前検査(存在とヘッダ)を通っても、展開時の照合で見つかれば中止する。作業ファイルは未着手
+        repo = self.build_linear(3)
+        victim = self.chunk_of(repo, 2)
+        helpers.flip_byte(victim)
+        with self.assertRaises(BrokenVersion):
+            repo.undo()
+        self.assert_clean_at(repo, 3)
+        self.assertEqual(self.files(), {"a.bin": b"v3"})
+        self.assertEqual(self.quarantined(repo), [victim.name])
+        # 隔離の記録があるので、次は事前検査で分かり、飛ばせる
+        self.assertTrue([e.broken for e in repo.log() if e.id == 2][0])
+        self.assertEqual(repo.undo(skip_broken=True).skipped, [2])
+        self.assertEqual(self.files(), {"a.bin": b"v1"})
+
+
+class TestVerify(CorruptionTestCase):
+    # M4-9, M4-11: verify と修復、log の ✗(F-1, C-4, C-5, C-6, C-11、設計書 4.9節)。
+
+    def test_f1_healthy(self):
+        repo = self.build_linear(2)
+        for quick in (False, True):
+            r = repo.verify(quick=quick)
+            self.assertTrue(r.ok)
+            self.assertEqual(
+                (r.changed, r.checked_chunks, r.checked_manifests, r.checked_commits, r.broken_commits),
+                (False, 3, 3, 3, []),
+            )
+        self.assertEqual(self.oplog(repo)[-1]["op"], "verify")
+
+    def test_c4_broken_manifest_affects_only_its_versions(self):
+        # 0: (a0, b0)、1: (a1, b0)、2: (a1, b2)。a1 のマニフェストを壊すと、壊れるのは 1 と 2 だけ
+        self.write("a.bin", b"a0")
+        self.write("b.bin", b"b0")
+        repo = self.init(["*.bin"])
+        self.write("a.bin", b"a1")
+        repo.commit()
+        self.write("b.bin", b"b2")
+        repo.commit()
+        sha = self.manifest_of(repo, 1)
+        helpers.flip_byte(repo._store.manifest_path(sha))
+        health = (repo.bvc_dir / "health.json").read_bytes()
+        self.assertFalse(any(e.broken for e in repo.log()))  # 未検出のうちは ✗ を付けない
+        self.assertEqual((repo.bvc_dir / "health.json").read_bytes(), health)  # log は記録しない
+
+        r = repo.verify()
+        self.assertEqual((r.ok, r.changed, r.broken_commits, r.bad_manifests), (False, True, [1, 2], [sha]))
+        self.assertEqual(self.quarantined(repo, "manifests"), [f"{sha}.json"])
+        self.assertEqual({e.id: e.broken for e in repo.log()}, {0: False, 1: True, 2: True})
+        repo.goto("0")
+        self.assertEqual(self.files(), {"a.bin": b"a0", "b.bin": b"b0"})
+        self.assertFalse(repo.verify().changed)  # 同じ異常は、2回目には変化なし
+
+    def test_c11_fake_chunk_and_c5_quarantine(self):
+        repo = self.build_linear(2)
+        victim = self.chunk_of(repo, 1)
+        victim.write_bytes(b"\x00" + b"xx")  # 形式も長さも正しいが、名前と中身が合わない
+        self.assertTrue(repo.verify(quick=True).ok)  # quick では見逃す
+        r = repo.verify()
+        self.assertEqual((r.broken_commits, r.bad_chunks), ([1], [victim.name]))
+        self.assertEqual(self.quarantined(repo), [victim.name])
+        self.assertTrue([e.broken for e in repo.log() if e.id == 1][0])
+        # 隔離したものは重複排除で再利用せず、同じ内容を commit すると保存し直す
+        self.write("a.bin", b"v1")
+        repo.commit()
+        self.assertEqual(victim.read_bytes()[1:], b"v1")
+        self.assertTrue(repo.verify().ok)
+        self.assertFalse(any(e.broken for e in repo.log()))
+
+    def test_quick_detects_missing_chunk(self):
+        repo = self.build_linear(2)
+        self.chunk_of(repo, 1).unlink()
+        r = repo.verify(quick=True)
+        self.assertEqual((r.ok, r.broken_commits), (False, [1]))
+        self.assertTrue([e.broken for e in repo.log() if e.id == 1][0])
+
+    def test_c6_repair_from_tracked_file(self):
+        repo = self.build_linear(2)
+        repo.undo()
+        victim = self.chunk_of(repo, 1)
+        helpers.flip_byte(victim)
+        self.assertEqual(repo.verify().broken_commits, [1])
+        r = repo.verify(repair=True)
+        self.assertEqual((r.ok, r.changed, r.repaired_chunks, r.bad_chunks), (True, True, [victim.name], []))
+        self.assertFalse(any(e.broken for e in repo.log()))
+        for cid in (0, 2, 1):
+            repo.goto(str(cid))
+            self.assertEqual(self.files(), {"a.bin": f"v{cid}".encode()})
+
+    def test_c6_repair_from_untracked_files(self):
+        # パターン外で、名前が同じファイル(別のフォルダ)とサイズが同じファイルを材料にする
+        for how in ("name", "size"):
+            with self.subTest(how=how):
+                helpers.remove_tree(self.tmp)
+                self.tmp.mkdir()
+                repo = self.build_linear(2)
+                self.set_config(repo, track=["*.bin"]).close()
+                repo = self.reopen()
+                self.chunk_of(repo, 1).unlink()
+                self.assertFalse(repo.verify(repair=True).ok)  # 材料が無ければ直らない
+                self.write("backup/a.bin" if how == "name" else "old.dat", b"v1")
+                r = repo.verify(repair=True)
+                self.assertTrue(r.ok, r)
+                repo.goto("1")
+                self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v1")
+                repo.close()
+
+    def test_repair_manifest(self):
+        repo = self.build_linear(2)
+        sha = self.manifest_of(repo, 2)
+        repo._store.manifest_path(sha).unlink()
+        r = repo.verify(repair=True)
+        self.assertEqual((r.ok, r.repaired_manifests, r.repaired_chunks), (True, [sha], []))
+        repo.goto("0")
+        repo.goto("2")
+        self.assertEqual(self.files(), {"a.bin": b"v2"})
+
+    def test_unreadable_version_file(self):
+        repo = self.build_linear(2)
+        repo.close()
+        helpers.break_json(self.tmp / ".bvc" / "commits" / "1.json")
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        r = repo.verify()
+        self.assertEqual((r.ok, r.broken_commits), (False, [1]))
+        self.assertEqual(repo._store.health.records("bad_commits")["1"]["reason"], "unreadable")
+        # 削除した版は検査の対象外(gc で消える)
+        repo.discard("1")
+        r = repo.verify()
+        self.assertEqual((r.ok, r.checked_commits), (True, 2))
+
+    def test_broken_data_of_discarded_version_is_not_reported(self):
+        repo = self.build_linear(2)
+        repo.discard("1")
+        self.chunk_of(repo, 1).unlink()
+        r = repo.verify()
+        self.assertEqual((r.ok, r.broken_commits, r.bad_chunks), (True, [], []))
+
+
+class TestRecoverControl(MoveTestCase):
+    # M4-10: 管理ファイルの自動復旧(C-7、設計書 4.12節)。
+
+    BREAKS = {
+        "delete": lambda p: p.unlink(),
+        "empty": lambda p: p.write_bytes(b""),
+        "json": helpers.break_json,
+        # JSON としては読めるが、必要な項目が無い・型が違う
+        "invalid": lambda p: p.write_text('{"format": 1, "bad_chunks": [], "names": 1, "entries": 1}', "utf-8"),
+    }
+
+    def setUp(self):
+        super().setUp()
+        # 版 0 ← 1 ← 2(a.bin = v<番号>)。@ = 1、ブランチ 0 に名前 main
+        repo = self.build_linear(2)
+        repo.undo()
+        repo.name_branch("main")
+        repo.close()
+        self.saved = self.tmp.parent / (self.tmp.name + "-saved")
+        shutil.copytree(self.tmp / ".bvc", self.saved)
+        self.addCleanup(helpers.remove_tree, self.saved)
+
+    def restore_bvc(self):
+        helpers.remove_tree(self.tmp / ".bvc")
+        shutil.copytree(self.saved, self.tmp / ".bvc")
+
+    def open_recovered(self, name):
+        # 警告を出して復旧し、作業ファイルは変えず、oplog に記録する。2回目は何もしない
+        with self.assertLogs("bvc.repo", "WARNING") as logs:
+            repo = self.reopen()
+        self.assertIn(name, "\n".join(logs.output))
+        self.assertEqual(self.files(), {"a.bin": b"v1"})
+        op = self.oplog(repo)[-1]
+        self.assertEqual((op["op"], op["args"]["file"]), ("recover_control", name))
+        repo.close()
+        with self.assertNoLogs("bvc.repo", "WARNING"):
+            repo = self.reopen()
+        return repo
+
+    def check_each_break(self, name, check):
+        for how, damage in self.BREAKS.items():
+            with self.subTest(file=name, damage=how):
+                self.restore_bvc()
+                damage(self.tmp / ".bvc" / name)
+                repo = self.open_recovered(name)
+                check(repo)
+                repo.close()
+
+    def test_c7_head(self):
+        def check(repo):
+            self.assertEqual(self.head(repo), Head(1, 0))  # 操作ログの最後の after
+            self.write("a.bin", b"new")
+            r = repo.commit()
+            self.assertEqual((r.commit.id, r.new_branch), (3, True))
+            self.write("a.bin", b"v1")
+        self.check_each_break("HEAD.json", check)
+
+    def test_c7_head_points_to_unknown_version(self):
+        (self.tmp / ".bvc" / "HEAD.json").write_text('{"format":1,"at":99,"branch":0}', "utf-8")
+        repo = self.open_recovered("HEAD.json")
+        self.assertEqual(self.head(repo), Head(1, 0))
+
+    def test_c7_head_without_oplog(self):
+        # 操作ログが無ければ、作業ファイルと内容が一致する版。それも無ければ最新の版(作業ファイルは変えない)
+        for edit, expected in ((None, Head(1, 0)), (b"edited", Head(2, 0))):
+            with self.subTest(edit=edit):
+                self.restore_bvc()
+                (self.tmp / ".bvc" / "oplog.jsonl").unlink()
+                (self.tmp / ".bvc" / "HEAD.json").unlink()
+                if edit is not None:
+                    self.write("a.bin", edit)
+                with self.assertLogs("bvc.repo", "WARNING") as logs:
+                    repo = self.reopen()
+                self.assertEqual(self.head(repo), expected)
+                if edit is not None:
+                    self.assertIn("最新の版", "\n".join(logs.output))
+                    self.assertEqual((self.tmp / "a.bin").read_bytes(), edit)
+                    self.assertTrue(repo.work_state().dirty)
+                    self.write("a.bin", b"v1")
+                repo.close()
+
+    def test_c7_counters(self):
+        def check(repo):
+            self.write("a.bin", b"new")
+            self.assertEqual(repo.commit().commit.id, 3)
+            self.write("a.bin", b"v1")
+        self.check_each_break("counters.json", check)
+
+    def test_c7_counters_do_not_reuse_numbers_removed_by_gc(self):
+        repo = self.reopen()
+        repo.goto("2")
+        self.write("a.bin", b"v3")
+        repo.commit()
+        repo.undo()
+        repo.discard("3")
+        repo.gc()
+        self.assertNotIn(3, commit_files(repo.bvc_dir))
+        repo.close()
+        (self.tmp / ".bvc" / "counters.json").unlink()
+        with self.assertLogs("bvc.repo", "WARNING"):
+            repo = self.reopen()
+        self.write("a.bin", b"v4")
+        self.assertEqual(repo.commit().commit.id, 4)
+
+    def test_c7_index(self):
+        def check(repo):
+            self.assertFalse(repo.work_state().dirty)
+            self.assertEqual(json.loads((self.tmp / ".bvc" / "index.json").read_text())["entries"], {})
+        self.check_each_break("index.json", check)
+
+    def test_c7_branches(self):
+        def check(repo):
+            self.assertEqual([b.name for b in repo.branches()], [None])
+        self.check_each_break("branches.json", check)
+
+    def test_c7_health(self):
+        def check(repo):
+            self.assertEqual(repo._store.health.records("bad_chunks"), {})
+            self.assertTrue(repo.verify().ok)
+        self.check_each_break("health.json", check)
+
+    def test_c7_config_is_not_recovered(self):
+        for how, damage in self.BREAKS.items():
+            with self.subTest(damage=how):
+                self.restore_bvc()
+                damage(self.tmp / ".bvc" / "config.json")
+                before = helpers.tree_hashes(self.tmp / ".bvc")
+                with self.assertRaises(BvcError) as cm:
+                    Repo.open(self.tmp)
+                self.assertIn("config.json", str(cm.exception))
+                self.assertEqual(helpers.tree_hashes(self.tmp / ".bvc"), before)
+
+    def test_c7_read_error_changes_nothing(self):
+        # 読み込み自体の失敗(使用中など)は復旧せずに中止する(I-20)
+        real = fsutil.read_bytes
+        for name in ("HEAD.json", "counters.json", "branches.json", "index.json", "health.json", "config.json"):
+            with self.subTest(file=name):
+                self.restore_bvc()
+                before = helpers.tree_hashes(self.tmp / ".bvc")
+
+                def busy(path, name=name):
+                    if Path(path).name == name:
+                        raise PermissionError(13, "使用中", str(path))
+                    return real(path)
+
+                with mock.patch.object(fsutil, "read_bytes", busy), self.assertRaises(FileBusy):
+                    Repo.open(self.tmp)
+                self.assertEqual(helpers.tree_hashes(self.tmp / ".bvc"), before)
+                self.assertFalse((self.tmp / ".bvc" / "lock").exists())
+
+    def test_unknown_format_changes_nothing(self):
+        for name in ("HEAD.json", "counters.json", "branches.json", "index.json", "health.json"):
+            with self.subTest(file=name):
+                self.restore_bvc()
+                (self.tmp / ".bvc" / name).write_text('{"format": 99}', "utf-8")
+                before = helpers.tree_hashes(self.tmp / ".bvc")
+                with self.assertRaises(UnsupportedFormat):
+                    Repo.open(self.tmp)
+                self.assertEqual(helpers.tree_hashes(self.tmp / ".bvc"), before)
 
 
 if __name__ == "__main__":

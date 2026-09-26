@@ -1,4 +1,4 @@
-# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-6)。観点: F-1, F-6, F-7, F-12, F-14, P-5。
+# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-11)。観点: F-1, F-6, F-7, F-12, F-14, P-5, C-2, C-6。
 
 import io
 import json
@@ -332,6 +332,67 @@ class TestHistoryCommands(CliTestCase):
         self.assertEqual(self.bvc("discard", "9")[0], 1)
         code, out, _ = self.bvc("--json", "discard", "2")
         self.assertEqual((code, json.loads(out)["discarded"]), (0, 2))
+
+
+
+class TestCorruptionCommands(CliTestCase):
+    # M4-8, M4-9, M4-11(仕様書 2.9節・3.4節・3.10節)。観点: F-1, F-12, C-2, C-6。
+
+    def setUp(self):
+        super().setUp()
+        self.write("a.bin", b"v0")
+        self.bvc("init", "--track", "*.bin")
+        for i in (1, 2):
+            self.write("a.bin", f"v{i}".encode())
+            self.bvc("commit", "-m", f"c{i}")
+
+    def break_version(self, cid):
+        # 版 cid の a.bin のチャンクを消す
+        with Repo.open(self.tmp) as repo:
+            m = repo._store.get_manifest(repo._history.get(cid).tree["a.bin"])
+            repo._store.chunk_path(m.chunks[0].sha).unlink()
+
+    def test_f1_verify(self):
+        code, out, err = self.bvc("verify")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("検査しました: チャンク 3、マニフェスト 3、版 3", out)
+        self.assertIn("異常はありません", out)
+        code, out, _ = self.bvc("--json", "verify", "--quick")
+        data = json.loads(out)
+        self.assertEqual((code, data["ok"], data["changed"], data["quick"]), (0, True, False, True))
+
+    def test_f12_verify_exit_code_and_repair(self):
+        self.break_version(1)
+        code, out, err = self.bvc("verify")
+        self.assertEqual(code, 1)
+        self.assertIn("壊れた版があります: 1", err)
+        self.assertIn("--repair", err)
+        code, out, _ = self.bvc("log")
+        self.assertRegex(out, r"(?m)^✗  1 ")
+        code, out, _ = self.bvc("--json", "verify")
+        data = json.loads(out)
+        self.assertEqual((code, data["ok"], data["broken_commits"]), (1, False, [1]))
+
+        self.write("backup/a.bin", b"v1")
+        code, out, err = self.bvc("verify", "--repair")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("修復しました: チャンク 1、マニフェスト 0", out)
+        code, out, _ = self.bvc("log")
+        self.assertNotIn("✗", out)
+
+    def test_c2_skip_broken(self):
+        self.break_version(1)
+        code, _, err = self.bvc("undo")
+        self.assertEqual(code, 1)
+        self.assertIn("--skip-broken", err)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v2")
+        code, out, _ = self.bvc("undo", "--skip-broken")
+        self.assertEqual(code, 0)
+        self.assertIn("版 0 に移動しました", out)
+        self.assertIn("壊れた版 1 を飛ばしました", out)
+        code, out, _ = self.bvc("--json", "redo", "--skip-broken")
+        data = json.loads(out)
+        self.assertEqual((code, data["after"]["at"], data["skipped"]), (0, 2, [1]))
 
 
 if __name__ == "__main__":

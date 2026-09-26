@@ -10,7 +10,7 @@ from typing import Final
 from unittest import mock
 
 from bvc import fsutil, worktree
-from bvc.errors import BrokenVersion, BvcError, CorruptData, FileBusy, FileChanging, UnsafePath
+from bvc.errors import BrokenVersion, BvcError, CorruptData, FileBusy, FileChanging, UnsafePath, UnsupportedFormat
 from bvc.model import Config, Head
 from bvc.store import ObjectStore
 from bvc.worktree import Worktree
@@ -442,6 +442,42 @@ class TestRecover(RestoreTestCase):
         with self.assertRaises(BvcError):
             self.restore()
         self.assertTrue((self.bvc / "txn" / "old" / "0").exists())
+
+
+class TestIndexCheck(WorktreeTestCase):
+    # M4-10: index.json の検査と作り直し(C-7)。
+    def test_check_and_reset(self):
+        self.write("a", b"1")
+        self.assertEqual(self.wt.check_index(), "missing")
+        st = self.wt.state({}, store_chunks=True)
+        self.wt.update_index(st.tree, st.fs_time_ns)
+        self.assertIsNone(self.wt.check_index())
+        index = self.bvc / "index.json"
+        for content in (b"", b"{", b'{"format":1,"fs_time_ns":0,"entries":{"../x":{}}}'):
+            with self.subTest(content=content):
+                index.write_bytes(content)
+                self.assertIsNotNone(self.wt.check_index())
+                self.wt.reset_index()
+                self.assertIsNone(self.wt.check_index())
+                self.assertEqual(self.wt._load_index(), ({}, 0))
+        index.write_bytes(b'{"format":7}')
+        with self.assertRaises(UnsupportedFormat):
+            self.wt.check_index()
+
+
+class TestRepairCandidates(WorktreeTestCase):
+    # M4-9: verify --repair の材料(仕様書 3.10節)。
+    def test_tracked_and_untracked_by_name_or_size(self):
+        wt = self.make(["*.bin"])
+        self.write("a.bin", b"1")
+        self.write("sub/a.bin", b"22")      # パターン外・名前が一致
+        self.write("sub/A.BIN.x", b"22")    # 名前が違う
+        self.write("x.dat", b"333")         # サイズが一致
+        self.write("y.dat", b"4444")
+        (self.bvc / "a.bin").write_bytes(b"1")  # .bvc の中は見ない
+        self.assertEqual(wt.repair_candidates({"A.bin"}, {3}), ["a.bin", "sub/a.bin", "x.dat"])
+        if helpers.try_symlink(self.tmp / "y.dat", self.tmp / "link.dat"):
+            self.assertNotIn("link.dat", wt.repair_candidates(set(), {4}))
 
 
 if __name__ == "__main__":

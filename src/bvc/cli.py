@@ -16,7 +16,17 @@ from typing import Any, ClassVar, Final
 
 from . import __version__
 from .errors import BvcError, SafetyAbort, UsageError
-from .model import BranchInfo, Commit, CommitResult, DiscardResult, GcReport, LogEntry, MoveResult, WorkState
+from .model import (
+    BranchInfo,
+    Commit,
+    CommitResult,
+    DiscardResult,
+    GcReport,
+    LogEntry,
+    MoveResult,
+    VerifyReport,
+    WorkState,
+)
 from .repo import Repo
 
 # 成功
@@ -141,6 +151,9 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("-m", "--message", dest="reason", default="", metavar="<理由>", help="理由(操作ログに記録する)")
         p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+        p.add_argument(
+            "--skip-broken", action="store_true", help="壊れた版を飛ばして、同じ方向で最も近い健全な版へ移動する"
+        )
 
     p = sub.add_parser("goto", help="指定の版へ移動する")
     p.add_argument("rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)")
@@ -166,6 +179,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("gc", help="削除済みの版と不要なデータを消す")
     p.add_argument("--dry-run", action="store_true", help="削除対象と容量を表示するだけで、何も削除しない")
     p.add_argument("--no-git", action="store_true", help="git の履歴による保護を省く")
+
+    p = sub.add_parser("verify", help="保存データを検査する(異常が残れば終了コード 1)")
+    p.add_argument("--quick", action="store_true", help="チャンクの存在とヘッダだけを確認する")
+    p.add_argument("--repair", action="store_true", help="壊れたデータを作業フォルダのファイルから修復する")
 
     return parser
 
@@ -214,6 +231,8 @@ def run(argv: list[str] | None = None) -> int:
             return _cmd_discard(args, start)
         if args.command == "gc":
             return _cmd_gc(args, start)
+        if args.command == "verify":
+            return _cmd_verify(args, start)
         logger.error("不明なコマンドです: %s", args.command)
         return EXIT_USAGE
     except BvcError as e:
@@ -328,9 +347,13 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
 def _cmd_move(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
         if args.command == "undo":
-            result = repo.undo(reason=args.reason, allow_missing=args.allow_missing)
+            result = repo.undo(
+                reason=args.reason, allow_missing=args.allow_missing, skip_broken=args.skip_broken
+            )
         elif args.command == "redo":
-            result = repo.redo(reason=args.reason, allow_missing=args.allow_missing)
+            result = repo.redo(
+                reason=args.reason, allow_missing=args.allow_missing, skip_broken=args.skip_broken
+            )
         else:
             result = repo.goto(args.rev, allow_missing=args.allow_missing)
     if args.json:
@@ -396,6 +419,22 @@ def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
     return EXIT_OK
 
 
+def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
+    # 異常が残っていれば終了コード 1(仕様書 3.10節)。
+    with Repo.open(start) as repo:
+        result = repo.verify(quick=args.quick, repair=args.repair)
+    code = EXIT_OK if result.ok else EXIT_ERROR
+    if args.json:
+        _print_json({**asdict(result), "ok": result.ok})
+        return code
+    lines = format_verify(result)
+    for line in lines[:-1] if not result.ok else lines:
+        logger.info("%s", line)
+    if not result.ok:
+        logger.error("%s", lines[-1])
+    return code
+
+
 # ---------------------------------------------------------------------------
 # 表示の整形
 # ---------------------------------------------------------------------------
@@ -407,6 +446,8 @@ def format_move(r: MoveResult) -> list[str]:
     if r.after.at == r.before.at:
         return [f"版 {r.after.at} のまま、現在のブランチを切り替えました"]
     lines = [f"版 {r.after.at} に移動しました"]
+    if r.skipped:
+        lines.append(f"  壊れた版 {', '.join(map(str, r.skipped))} を飛ばしました")
     if r.auto_commit is not None:
         lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
     lines += [f"  restored: {p}" for p in r.restored]
@@ -463,6 +504,26 @@ def format_gc(r: GcReport) -> str:
     return f"削除対象: {detail}" if r.dry_run else f"削除しました: {detail}"
 
 
+def format_verify(r: VerifyReport) -> list[str]:
+    # 最後の行が結果(異常が残っていれば、壊れた版の一覧)。
+    lines = [
+        f"検査しました{'(--quick)' if r.quick else ''}: チャンク {r.checked_chunks}、"
+        f"マニフェスト {r.checked_manifests}、版 {r.checked_commits}"
+    ]
+    if r.repaired_chunks or r.repaired_manifests:
+        lines.append(
+            f"  修復しました: チャンク {len(r.repaired_chunks)}、マニフェスト {len(r.repaired_manifests)}"
+        )
+    if r.bad_chunks or r.bad_manifests:
+        lines.append(f"  欠損・破損: チャンク {len(r.bad_chunks)}、マニフェスト {len(r.bad_manifests)}")
+    if r.ok:
+        lines.append("異常はありません")
+    else:
+        hint = "" if r.repair else "(verify --repair で修復できる場合があります)"
+        lines.append(f"壊れた版があります: {', '.join(map(str, r.broken_commits))}{hint}")
+    return lines
+
+
 def format_size(n: int) -> str:
     for unit in ("B", "KiB", "MiB", "GiB"):
         if n < 1024 or unit == "GiB":
@@ -492,7 +553,7 @@ def _short_time(iso: str) -> str:
 
 def _entry_text(e: LogEntry) -> str:
     if e.commit is None:
-        return f"{e.id}  (読み込み不可)"
+        return f"{e.id}  (読み込み不可)" + ("  (削除済み)" if e.discarded else "")
     c = e.commit
     parts = [str(e.id)]
     if e.branch_label:
