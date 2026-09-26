@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "バイナリファイル向けバージョン管理システムのPython版(試作)"
 readme = "README.md"
 requires-python = ">=3.10"
-# license = { text = "MIT" }
+license = { text = "MIT" }
 authors = [
   { name = "heppocogne", email = "83043568+heppocogne@users.noreply.github.com" },
 ]
@@ -32,8 +32,8 @@ dev = [
     "pytest-cov>=7.0.0", # カバレッジ測定が必要な場合など
 ]
 
-# [project.urls]
-# Homepage = "https://github.com/heppocogne/bvc-py"
+[project.urls]
+Homepage = "https://github.com/heppocogne/bvc_py"
 
 [project.scripts]
 bvc = "bvc.main:main"
