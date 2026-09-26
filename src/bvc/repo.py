@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Final
 
 from . import fsutil
 from .chunkers import make_chunker
@@ -43,9 +43,9 @@ from .worktree import Worktree
 
 logger = logging.getLogger(__name__)
 
-BVC_DIR = ".bvc"
-DEFAULT_CHUNKER: dict = {"name": "fixed", "size": 4194304}
-_SUBDIRS = ("commits", "manifests", "chunks", "notes", "quarantine", "txn", "tmp")
+BVC_DIR: Final[str] = ".bvc"
+DEFAULT_CHUNKER: Final[dict[str, Any]] = {"name": "fixed", "size": 4194304}
+_SUBDIRS: Final[tuple[str, str, str, str, str, str, str]] = ("commits", "manifests", "chunks", "notes", "quarantine", "txn", "tmp")
 
 
 def _config_error(msg: str) -> UsageError:

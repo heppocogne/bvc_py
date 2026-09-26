@@ -2,12 +2,13 @@
 # 別フォルダに conftest と helpers を複製し、子プロセスの pytest で確認する。
 
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-TESTS_DIR = Path(__file__).parent
+TESTS_DIR: Final[Path] = Path(__file__).parent
 
-SAMPLE = '''
+SAMPLE: Final[str] = '''
 import unittest
 import pytest
 from tests import helpers

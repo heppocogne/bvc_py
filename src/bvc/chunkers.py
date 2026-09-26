@@ -54,7 +54,7 @@ def _mark_last(pieces: Iterator[bytes]) -> Iterator[tuple[bytes, bool]]:
 
 
 class FixedChunker(Chunker):
-    name = "fixed"
+    name: ClassVar[str] = "fixed"
 
     def __init__(self, size: int) -> None:
         if type(size) is not int or not 1 <= size <= MAX_FIXED_SIZE:
@@ -75,8 +75,8 @@ class FixedChunker(Chunker):
 
 
 class WholeChunker(Chunker):
-    name = "whole"
-    always_stream = True
+    name: ClassVar[str] = "whole"
+    always_stream: ClassVar[bool] = True
 
     def __init__(self) -> None:
         pass
@@ -88,7 +88,7 @@ class WholeChunker(Chunker):
         yield from _mark_last(_read_limited(f, None))
 
 
-CHUNKERS: dict[str, type[Chunker]] = {
+CHUNKERS: Final[dict[str, type[Chunker]]] = {
     FixedChunker.name: FixedChunker,
     WholeChunker.name: WholeChunker,
 }

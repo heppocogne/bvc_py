@@ -12,7 +12,7 @@ import unicodedata
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from . import __version__
 from .errors import BvcError, SafetyAbort
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 class _Formatter(logging.Formatter):
     # 警告以上には接頭辞を付ける。record.prefix があればそれを使う(例: "中止")。
-    _PREFIX = {
+    _PREFIX: ClassVar[dict[int, str]] = {
         logging.WARNING: "警告",
         logging.ERROR: "エラー",
         logging.CRITICAL: "エラー",

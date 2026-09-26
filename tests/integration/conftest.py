@@ -7,15 +7,15 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Final
 
 import pytest
 
 from tests import helpers
 
-DRIVER = Path(__file__).with_name("kill_driver.py")
+DRIVER: Final[Path] = Path(__file__).with_name("kill_driver.py")
 # 待機に入らないまま止まった場合の保険(秒)
-TIMEOUT = 60
+TIMEOUT: Final[int] = 60
 
 
 @pytest.fixture

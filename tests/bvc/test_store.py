@@ -8,6 +8,7 @@ import tracemalloc
 import unittest
 import zlib
 from pathlib import Path
+from typing import Any, Final
 from unittest import mock
 
 from bvc import chunkers, fsutil, store
@@ -16,8 +17,8 @@ from bvc.model import ChunkRef, Manifest
 from bvc.store import Health, ObjectStore
 from tests import helpers
 
-FIXED = {"name": "fixed", "size": 1000}
-WHOLE = {"name": "whole"}
+FIXED: Final[dict[str, Any]] = {"name": "fixed", "size": 1000}
+WHOLE: Final[dict[str, Any]] = {"name": "whole"}
 
 
 class StoreTestCase(helpers.TempDirTestCase):

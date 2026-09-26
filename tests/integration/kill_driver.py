@@ -14,15 +14,16 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Final
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tests import helpers  # noqa: E402,F401  長いパスの設定(BVC_TEST_LONG_PATH)を反映する
 from bvc import fsutil  # noqa: E402
 from bvc.repo import Repo  # noqa: E402
 
-WAIT_SECONDS = 600
+WAIT_SECONDS: Final[int] = 600
 
 
 def main(argv: list[str]) -> int:

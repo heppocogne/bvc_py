@@ -6,6 +6,7 @@ import time
 import unicodedata
 import unittest
 from pathlib import Path
+from typing import Final
 from unittest import mock
 
 from bvc import fsutil, worktree
@@ -15,7 +16,7 @@ from bvc.store import ObjectStore
 from bvc.worktree import Worktree
 from tests import helpers
 
-OTHER_SHA = "b" * 64
+OTHER_SHA: Final[str] = "b" * 64
 
 
 class WorktreeTestCase(helpers.TempDirTestCase):

@@ -24,7 +24,9 @@ IS_WINDOWS: Final[bool] = os.name == "nt"
 # この長さ以上の絶対パスを \\?\ 付きにする(フォルダ作成の上限が 248 のため)。
 # テストでは 0 に差し替えて、常に \\?\ 付きの経路を通す(I-16)。
 # 関数の中では、呼び出しのたびにモジュール変数として参照すること。
-LONG_PATH_THRESHOLD: Final[int] = 248
+# テストから書き換える可変値のため Final を付けない(大文字だが定数ではない)。
+# FIXME: 定数ではないので、値の渡し方を変える
+LONG_PATH_THRESHOLD = 248
 
 # 障害注入のフック(I-11)。段階名を渡して呼び出す。既定は None。
 _fault_hook: Callable[[str], None] | None = None
@@ -64,7 +66,9 @@ def os_path(base: str | os.PathLike[str], rel: str = "") -> str:
         return p
     if len(p) < LONG_PATH_THRESHOLD:
         return p
-    p = os.path.abspath(p)  # \\?\ 付きでは '/' や '..' が解釈されないため、先に正規化する
+    p = os.path.abspath(
+        p
+    )  # \\?\ 付きでは '/' や '..' が解釈されないため、先に正規化する
     if p.startswith("\\\\"):
         return _UNC_PREFIX + p[2:]
     return _PREFIX + p
@@ -72,9 +76,9 @@ def os_path(base: str | os.PathLike[str], rel: str = "") -> str:
 
 def _strip_prefix(p: str) -> str:
     if p.startswith(_UNC_PREFIX):
-        return "\\\\" + p[len(_UNC_PREFIX):]
+        return "\\\\" + p[len(_UNC_PREFIX) :]
     if p.startswith(_PREFIX):
-        return p[len(_PREFIX):]
+        return p[len(_PREFIX) :]
     return p
 
 
@@ -197,6 +201,7 @@ def resolve_in_workdir(workdir: str | os.PathLike[str], rel: str) -> Path:
 # 原子的書き込み・JSON(設計書 2.1節・4.7節)
 # ---------------------------------------------------------------------------
 
+
 def canonical_json(obj: Any) -> bytes:
     # 正規化 JSON(キー順固定、区切りの空白なし、UTF-8)。マニフェスト名などのハッシュに使う。
     return json.dumps(
@@ -232,7 +237,9 @@ def remove_quietly(path: str | os.PathLike[str]) -> None:
         pass
 
 
-def replace(src: str | os.PathLike[str], dst: str | os.PathLike[str], stage: str) -> None:
+def replace(
+    src: str | os.PathLike[str], dst: str | os.PathLike[str], stage: str
+) -> None:
     # os.replace の前に障害注入の地点 'replace:<stage>' を置いたもの。
     fault(f"replace:{stage}")
     os.replace(os_path(src), os_path(dst))
@@ -303,6 +310,7 @@ def load_json(path: str | os.PathLike[str], what: str) -> dict:
 # JSONL(追記のみ)
 # ---------------------------------------------------------------------------
 
+
 def append_jsonl(path: str | os.PathLike[str], obj: dict) -> None:
     # 1行を末尾に追記して fsync する。書き換え・切り詰めはしない。
     # 前回の書き込みが途中で終わって最終行に改行が無い場合は、先に改行を足して、
@@ -358,6 +366,7 @@ def read_jsonl(
 # ロック(設計書 4.7節)
 # ---------------------------------------------------------------------------
 
+
 class FileLock:
     # O_CREAT|O_EXCL で作るロックファイル。with 文で使える。
     #
@@ -381,14 +390,20 @@ class FileLock:
             "host": socket.gethostname(),
         }
         try:
-            fd = os.open(os_path(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = os.open(
+                os_path(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
+            )
         except (FileExistsError, PermissionError) as e:
             # Windows では削除待ちのファイルに対して PermissionError になる。どちらも使用中として止める
             other = self.read_info()
             raise Locked(
                 "別の bvc がこのリポジトリを使用中です"
                 f"(ロックファイル: {self.path}"
-                + (f"、pid={other.get('pid')}、host={other.get('host')}、time={other.get('time')}" if other else "")
+                + (
+                    f"、pid={other.get('pid')}、host={other.get('host')}、time={other.get('time')}"
+                    if other
+                    else ""
+                )
                 + ")。使用中の bvc が無いことを確かめてから、ロックファイルを削除してください",
                 path=str(self.path),
                 info=other,
@@ -425,6 +440,7 @@ class FileLock:
 # ---------------------------------------------------------------------------
 # glob 照合(仕様書 2.4節)
 # ---------------------------------------------------------------------------
+
 
 def _glob_to_regex(pattern: str) -> str:
     # '/' 区切りの glob を正規表現にする。

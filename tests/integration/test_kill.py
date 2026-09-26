@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -16,8 +17,8 @@ pytestmark = pytest.mark.kill
 # 版 0: a=a0, b=b0, d/c=c0
 # 版 1: a=a1, b=b1, e=e1(d/c は削除)
 # 作業フォルダ: 版 1 から a を編集した状態(goto 0 で自動コミット 2 ができる)
-V0 = {"a.bin": b"a0", "b.bin": b"b0", "d/c.bin": b"c0"}
-EDITED = {"a.bin": b"a-edit", "b.bin": b"b1", "e.bin": b"e1"}
+V0: Final[dict[str, bytes]] = {"a.bin": b"a0", "b.bin": b"b0", "d/c.bin": b"c0"}
+EDITED: Final[dict[str, bytes]] = {"a.bin": b"a-edit", "b.bin": b"b1", "e.bin": b"e1"}
 
 
 def write(root: Path, rel: str, data: bytes) -> None:
@@ -66,7 +67,7 @@ def check_converged(root: Path) -> Head:
 
 # (段階名, 回数, 収束後の HEAD)
 # HEAD 1: 自動コミットの HEAD 更新の前。2: 自動コミットの後、swapped の前(元に戻す)。0: swapped の後(完了させる)
-GOTO_STAGES = (
+GOTO_STAGES: Final[list[tuple[str, int, int]]] = (
     [("chunk_write", 1, 1), (r"atomic_write:[0-9a-f]{64}\.json", 1, 1), ("atomic_write:counters.json", 1, 1),
      (r"atomic_write:\d+\.json", 1, 1), ("atomic_write:HEAD.json", 1, 1), ("atomic_write:index.json", 1, 2)]
     # journal: staging, swapping, done×4, swapped
@@ -107,7 +108,7 @@ def test_r3_kill_during_recover(workdir, driver, first, second):
     assert head.at == (0 if first[0] == "atomic_write:HEAD.json" else 2)
 
 
-COMMIT_STAGES = [
+COMMIT_STAGES: Final[list[tuple[str, int]]] = [
     ("chunk_write", 1),
     (r"atomic_write:[0-9a-f]{64}\.json", 1),
     ("atomic_write:counters.json", 1),
@@ -137,7 +138,7 @@ def test_r1_kill_during_commit(workdir, driver, stage, count):
 
 
 # gc 用: 版 0〜3(a.bin の内容は a0〜a3)のうち 1 と 2 を削除済みにする。@ = 3
-GC_LIVING = {0: {"a.bin": b"a0"}, 3: {"a.bin": b"a3"}}
+GC_LIVING: Final[dict[int, dict[str, bytes]]] = {0: {"a.bin": b"a0"}, 3: {"a.bin": b"a3"}}
 
 
 def build_for_gc(root: Path) -> None:
@@ -165,7 +166,7 @@ def check_gc_converged(root: Path) -> None:
         assert list((repo.bvc_dir / "notes").iterdir()) == []
 
 
-GC_STAGES = [("gc:commit", 1), ("gc:commit", 2), ("gc:manifest", 1), ("gc:manifest", 2),
+GC_STAGES: Final[list[tuple[str, int]]] = [("gc:commit", 1), ("gc:commit", 2), ("gc:manifest", 1), ("gc:manifest", 2),
              ("gc:chunk", 1), ("gc:chunk", 2), ("gc:tmp", 1), ("append_jsonl:oplog.jsonl", 1)]
 
 

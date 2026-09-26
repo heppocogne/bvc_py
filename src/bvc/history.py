@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Final, Iterable
 
 from .errors import CorruptData, IntegrityError, RevisionError, UnsafePath
 from .fsutil import (
@@ -25,7 +25,7 @@ from .model import Commit, Head, Note
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("init", "commit", "auto", "import")
+KINDS: Final[tuple[str, ...]] = ("init", "commit", "auto", "import")
 
 
 def check_branch_name(name: Any) -> str:

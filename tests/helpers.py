@@ -11,10 +11,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Callable, Iterator, TypeVar
+from typing import Callable, Final, Iterator, TypeVar
 
-ENV_RUN_SLOW = "BVC_RUN_SLOW"
-ENV_LONG_PATH = "BVC_TEST_LONG_PATH"
+ENV_RUN_SLOW: Final[str] = "BVC_RUN_SLOW"
+ENV_LONG_PATH: Final[str] = "BVC_TEST_LONG_PATH"
 
 _F = TypeVar("_F", bound=Callable)
 

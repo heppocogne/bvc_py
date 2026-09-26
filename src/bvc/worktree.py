@@ -9,7 +9,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from typing import Any, Callable, Collection
+from typing import Any, Callable, Collection, Final
 
 from .errors import (
     BrokenVersion,
@@ -47,23 +47,27 @@ logger = logging.getLogger(__name__)
 # 書き込み中のファイルの扱い(仕様書 2.5節): 読み取りの前後で stat が変われば、
 # RETRY_WAIT 秒おきに読み直し、RETRY_ATTEMPTS 回とも変われば FileChanging。
 # テストで待ち時間を短くできるよう、モジュール変数にしている。
+# RETRY_ATTEMPTS/RETRY_WAIT はテストから差し替える可変値のため Final を付けない(大文字だが定数ではない)。
+# FIXME: 定数ではないので、値の渡し方を変える
 RETRY_ATTEMPTS = 3
 RETRY_WAIT = 1.0
 
 # stat キャッシュを信用する条件の余裕(FAT の更新日時の粒度。設計書 4.2節、I-14)
-FS_TIME_MARGIN_NS = 2_000_000_000
+FS_TIME_MARGIN_NS: Final[int] = 2_000_000_000
 
 # 復元前に確保する空き容量の余裕分(設計書 4.6節の0)
-DISK_MARGIN = 64 << 20
+DISK_MARGIN: Final[int] = 64 << 20
 
-# journal.json の状態(設計書 4.6節)
-JOURNAL_STATES = ("staging", "swapping", "swapped")
+# journal.json の状態(設計書 4.6節。取りうる値の集合なので可変長)
+JOURNAL_STATES: Final[tuple[str, ...]] = ("staging", "swapping", "swapped")
 
 
 class Worktree:
     # 作業フォルダの追跡ファイルを管理する。bvc_dir は .bvc フォルダ。
 
-    def __init__(self, workdir: Path, bvc_dir: Path, config: Config, store: ObjectStore):
+    def __init__(
+        self, workdir: Path, bvc_dir: Path, config: Config, store: ObjectStore
+    ):
         self.workdir = Path(workdir)
         self._bvc_dir = Path(bvc_dir)
         self._tmp = self._bvc_dir / "tmp"
@@ -76,7 +80,11 @@ class Worktree:
         self._track = [compile_glob(p) for p in config.track]
         self._ignore = [compile_glob(p) for p in config.ignore]
         self._rules = [
-            (compile_glob(r["pattern"]), r.get("chunker", config.chunker), r.get("compression"))
+            (
+                compile_glob(r["pattern"]),
+                r.get("chunker", config.chunker),
+                r.get("compression"),
+            )
             for r in config.rules
         ]
         # 直前の走査で見つけた、正規化後のパス → 実際の名前('/' 区切り)
@@ -108,7 +116,9 @@ class Worktree:
                 with os.scandir(os_path(dir_path)) as it:
                     entries = list(it)
             except OSError as e:
-                raise FileBusy(f"フォルダを読み取れません: {rel_dir or '.'}({e})", path=rel_dir) from e
+                raise FileBusy(
+                    f"フォルダを読み取れません: {rel_dir or '.'}({e})", path=rel_dir
+                ) from e
             for e in entries:
                 if not rel_dir and e.name.casefold() == ".bvc":
                     continue
@@ -184,7 +194,9 @@ class Worktree:
             except FileNotFoundError:
                 continue  # 走査の後に消えた。欠落として扱う
             except OSError as e:
-                raise FileBusy(f"ファイルにアクセスできません: {rel}({e})", path=rel) from e
+                raise FileBusy(
+                    f"ファイルにアクセスできません: {rel}({e})", path=rel
+                ) from e
 
             ent = index.get(rel)
             if (
@@ -193,7 +205,10 @@ class Worktree:
                 and ent["size"] == st.st_size
                 and ent["mtime_ns"] == st.st_mtime_ns
                 and ent["mtime_ns"] < index_fs_time - FS_TIME_MARGIN_NS
-                and (not store_chunks or self.store.manifest_ok(ent["manifest"], "exists"))
+                and (
+                    not store_chunks
+                    or self.store.manifest_ok(ent["manifest"], "exists")
+                )
             ):
                 tree[rel] = ent["manifest"]
                 stats[rel] = (st.st_size, st.st_mtime_ns)
@@ -211,7 +226,9 @@ class Worktree:
         gone = sorted(p for p in base_tree if p not in tree)
 
         # 名前変更の検知(設計書 4.3節)
-        renamed, missing, hints = self._detect_renames(gone, added, base_tree, tree, renames, rename_threshold)
+        renamed, missing, hints = self._detect_renames(
+            gone, added, base_tree, tree, renames, rename_threshold
+        )
         # renamed から消費された added は除く
         renamed_to = {r[1] for r in renamed}
         added = sorted(p for p in added if p not in renamed_to)
@@ -240,32 +257,48 @@ class Worktree:
                 st1 = os.stat(p)
                 f = open(p, "rb")
             except FileNotFoundError as e:
-                raise FileChanging(f"読み取り中にファイルが消えました: {rel}", path=rel) from e
+                raise FileChanging(
+                    f"読み取り中にファイルが消えました: {rel}", path=rel
+                ) from e
             except OSError as e:
                 raise FileBusy(
-                    f"ファイルを開けません(他のアプリが使用中の可能性があります): {rel}({e})", path=rel
+                    f"ファイルを開けません(他のアプリが使用中の可能性があります): {rel}({e})",
+                    path=rel,
                 ) from e
             with f:
                 try:
                     if store_chunks:
                         sha, put = self.store.put_file(
-                            f, chunker, self.config.verify_chunks, path=rel, compression=compression
+                            f,
+                            chunker,
+                            self.config.verify_chunks,
+                            path=rel,
+                            compression=compression,
                         )
                     else:
                         sha = self.store.hash_file(f, chunker)
                         put = PutStats(size=st1.st_size)
                 except OSError as e:
-                    raise FileBusy(f"ファイルの読み取り・保存に失敗しました: {rel}({e})", path=rel) from e
+                    raise FileBusy(
+                        f"ファイルの読み取り・保存に失敗しました: {rel}({e})", path=rel
+                    ) from e
             try:
                 st2 = os.stat(p)
             except FileNotFoundError as e:
-                raise FileChanging(f"読み取り中にファイルが消えました: {rel}", path=rel) from e
-            if (st1.st_size, st1.st_mtime_ns) == (st2.st_size, st2.st_mtime_ns) and put.size == st2.st_size:
+                raise FileChanging(
+                    f"読み取り中にファイルが消えました: {rel}", path=rel
+                ) from e
+            if (st1.st_size, st1.st_mtime_ns) == (
+                st2.st_size,
+                st2.st_mtime_ns,
+            ) and put.size == st2.st_size:
                 return sha, put, st2
             if attempt + 1 < RETRY_ATTEMPTS:
                 logger.info("書き込み中のため読み直します: %s", rel)
                 time.sleep(RETRY_WAIT)
-        raise FileChanging(f"ファイルが書き込み中です(読み取りの前後で変わりました): {rel}", path=rel)
+        raise FileChanging(
+            f"ファイルが書き込み中です(読み取りの前後で変わりました): {rel}", path=rel
+        )
 
     # --- stat キャッシュ(M2-8、設計書 2.5節) ---
 
@@ -453,23 +486,29 @@ class Worktree:
         self._check_target(target_tree, tracked)
         return sorted(tracked)
 
-    def _check_target(self, target_tree: dict[str, str], tracked: dict[str, str]) -> None:
+    def _check_target(
+        self, target_tree: dict[str, str], tracked: dict[str, str]
+    ) -> None:
         # tracked は追跡ファイルの 正規化後のパス → 実際の名前。
         folded: dict[str, str] = {}
         for rel in sorted(target_tree):
             if check_relpath(rel) != rel:
-                raise UnsafePath(f"移動先の版に正規化されていないパスがあります: {rel!r}", path=rel)
+                raise UnsafePath(
+                    f"移動先の版に正規化されていないパスがあります: {rel!r}", path=rel
+                )
             check_sha(target_tree[rel])
             key = rel.casefold()
             if IS_WINDOWS and key in folded:
                 raise UnsafePath(
-                    f"移動先の版に、大文字小文字だけが異なるパスがあります: {folded[key]} と {rel}", path=rel
+                    f"移動先の版に、大文字小文字だけが異なるパスがあります: {folded[key]} と {rel}",
+                    path=rel,
                 )
             folded[key] = rel
         for sha in sorted(set(target_tree.values())):
             if not self.store.manifest_ok(sha, "exists"):
                 raise BrokenVersion(
-                    f"移動先の版の保存データが壊れているか欠けています(マニフェスト {sha})", sha=sha
+                    f"移動先の版の保存データが壊れているか欠けています(マニフェスト {sha})",
+                    sha=sha,
                 )
         tracked_fold = {rel.casefold(): rel for rel in tracked}
         deleting = {rel for rel in tracked if rel not in target_tree}
@@ -477,7 +516,11 @@ class Worktree:
             self._check_collision(rel, tracked, tracked_fold, deleting)
 
     def _check_collision(
-        self, rel: str, tracked: dict[str, str], tracked_fold: dict[str, str], deleting: set[str]
+        self,
+        rel: str,
+        tracked: dict[str, str],
+        tracked_fold: dict[str, str],
+        deleting: set[str],
     ) -> None:
         # 書き出し先 rel(とその途中のフォルダ)に、追跡対象外のものが無いか確かめる(仕様書 2.8節、R-10)。
         # 追跡ファイルの場所なら衝突ではない(置き換えるか、先に削除する)。
@@ -509,7 +552,11 @@ class Worktree:
         resolve_in_workdir(self.workdir, rel)
 
     def _tracked_owner(
-        self, sub: str, st: os.stat_result, tracked: dict[str, str], tracked_fold: dict[str, str]
+        self,
+        sub: str,
+        st: os.stat_result,
+        tracked: dict[str, str],
+        tracked_fold: dict[str, str],
     ) -> str | None:
         # sub にあるもの(lstat の結果 st)が追跡ファイルなら、その正規化後のパスを返す。
         # 大文字小文字を区別しないファイルシステムでは、別の綴りの追跡ファイルと同じ実体のことがある。
@@ -540,7 +587,9 @@ class Worktree:
         # current は直前の state の結果(その時点の内容と stat を、退避の直前に再確認する)。
         # 置き換えが済んだら on_committed(head) で HEAD を更新する。
         if os.path.lexists(os_path(self._journal_file)):
-            raise BvcError("中断した復元の記録(journal.json)が残っています。bvc を実行し直してください")
+            raise BvcError(
+                "中断した復元の記録(journal.json)が残っています。bvc を実行し直してください"
+            )
         tracked = {rel: self._names.get(rel, rel) for rel in current.tree}
         self._check_target(target_tree, tracked)
         ops = self._plan(target_tree, current, tracked)
@@ -569,11 +618,15 @@ class Worktree:
         except BaseException as e:
             self._discard_txn()
             if isinstance(e, CorruptData):
-                raise BrokenVersion(f"移動先の版の保存データが壊れています({e})", **e.details) from e
+                raise BrokenVersion(
+                    f"移動先の版の保存データが壊れています({e})", **e.details
+                ) from e
             if isinstance(e, OSError) and e.errno == errno.ENOSPC:
                 raise DiskFull(f"空き容量が足りないため中止しました({e})") from e
             if isinstance(e, OSError):
-                raise FileBusy(f"復元の準備中に読み書きに失敗したため中止しました(作業ファイルは変わっていません): {e}") from e
+                raise FileBusy(
+                    f"復元の準備中に読み書きに失敗したため中止しました(作業ファイルは変わっていません): {e}"
+                ) from e
             raise
 
         try:
@@ -614,16 +667,22 @@ class Worktree:
                     f"中断した復元の記録と作業域の内容が一致しません。{self._txn / 'old'} を確認してください"
                 )
             self._discard_txn()
-            logger.warning("中断していた復元を取り消しました(作業ファイルは変わっていません)")
+            logger.warning(
+                "中断していた復元を取り消しました(作業ファイルは変わっていません)"
+            )
         elif state == "swapping":
             self._rollback(ops)
             self._abandon(journal)
-            logger.warning("中断していた復元を元に戻しました(作業ファイルは復元前の状態です)")
+            logger.warning(
+                "中断していた復元を元に戻しました(作業ファイルは復元前の状態です)"
+            )
         else:
             self._stats = {}
             self._names = {}
             self._complete(journal, ops, on_committed, has_journal=True)
-            logger.warning("中断していた復元を完了しました(版 %d)", journal["head"]["at"])
+            logger.warning(
+                "中断していた復元を完了しました(版 %d)", journal["head"]["at"]
+            )
 
     def _plan(
         self, target_tree: dict[str, str], current: WorkState, tracked: dict[str, str]
@@ -632,7 +691,9 @@ class Worktree:
         ops: list[_Op] = []
         for rel in sorted(current.tree):
             if rel not in target_tree:
-                ops.append(_Op(len(ops), "delete", rel, tracked[rel], None, self._stats[rel]))
+                ops.append(
+                    _Op(len(ops), "delete", rel, tracked[rel], None, self._stats[rel])
+                )
         for rel in sorted(target_tree):
             if current.tree.get(rel) != target_tree[rel]:
                 src = tracked[rel] if rel in current.tree else None
@@ -642,7 +703,9 @@ class Worktree:
 
     def _check_space(self, ops: list[_Op]) -> None:
         # 書き出す内容の合計 + 余裕分の空き容量があるか(R-6)。
-        need = sum(self.store.get_manifest(op.sha).size for op in ops if op.kind == "write")
+        need = sum(
+            self.store.get_manifest(op.sha).size for op in ops if op.kind == "write"
+        )
         makedirs(self._txn)
         free = shutil.disk_usage(os_path(self._txn)).free
         if free < need + DISK_MARGIN:
@@ -683,7 +746,9 @@ class Worktree:
             if op.kind == "write":
                 dst = resolve_in_workdir(self.workdir, op.path)
                 if os.path.lexists(os_path(dst)):
-                    raise FileChanging(f"書き出し先に新しいファイルがあります: {op.path}", path=op.path)
+                    raise FileChanging(
+                        f"書き出し先に新しいファイルがあります: {op.path}", path=op.path
+                    )
                 makedirs(dst.parent)
                 replace(new_dir / str(op.n), dst, f"swap:{op.n}")
                 fsync_dir(dst.parent)
@@ -697,14 +762,17 @@ class Worktree:
         try:
             st = os.lstat(os_path(src))
         except FileNotFoundError:
-            raise FileChanging(f"復元の途中でファイルが消えました: {op.path}", path=op.path) from None
+            raise FileChanging(
+                f"復元の途中でファイルが消えました: {op.path}", path=op.path
+            ) from None
         if (
             is_link_or_reparse(st)
             or not stat.S_ISREG(st.st_mode)
             or (st.st_size, st.st_mtime_ns) != op.expect
         ):
             raise FileChanging(
-                f"確認の後にファイルが変更されたため、すべて元に戻して中止しました: {op.path}", path=op.path
+                f"確認の後にファイルが変更されたため、すべて元に戻して中止しました: {op.path}",
+                path=op.path,
             )
 
     def _rollback(self, ops: list[_Op]) -> None:
@@ -720,7 +788,11 @@ class Worktree:
                     st = os.lstat(os_path(dst))
                 except FileNotFoundError:
                     st = None
-                if st is None or op.staged is None or (st.st_size, st.st_mtime_ns) != op.staged:
+                if (
+                    st is None
+                    or op.staged is None
+                    or (st.st_size, st.st_mtime_ns) != op.staged
+                ):
                     raise BvcError(
                         f"元に戻せません: {op.path} が復元の途中で変更されたか、見つかりません。"
                         f"{self._txn} と {self._journal_file} を確認してください",
@@ -729,7 +801,9 @@ class Worktree:
                 replace(dst, new, f"unswap:{op.n}")
             if os.path.lexists(os_path(old)):
                 if op.src is None:
-                    raise BvcError(f"中断した復元の記録と作業域の内容が一致しません: {old}")
+                    raise BvcError(
+                        f"中断した復元の記録と作業域の内容が一致しません: {old}"
+                    )
                 src = self._work_path(op.src)
                 if os.path.lexists(os_path(src)):
                     raise BvcError(
@@ -741,7 +815,11 @@ class Worktree:
                 replace(old, src, f"unstash:{op.n}")
 
     def _complete(
-        self, journal: dict, ops: list[_Op], on_committed: Callable[[Head], None], has_journal: bool
+        self,
+        journal: dict,
+        ops: list[_Op],
+        on_committed: Callable[[Head], None],
+        has_journal: bool,
     ) -> None:
         # 置き換えの完了後: HEAD の更新 → index の更新 → 作業域と journal の削除。
         # ここで失敗しても journal は swapped のまま残り、次の recover で完了させる。
@@ -785,7 +863,10 @@ class Worktree:
             if data["state"] not in JOURNAL_STATES:
                 raise ValueError("state")
             head = data["head"]
-            data["head"] = {"at": check_id(head["at"]), "branch": check_id(head["branch"])}
+            data["head"] = {
+                "at": check_id(head["at"]),
+                "branch": check_id(head["branch"]),
+            }
             if type(data["fs_time_ns"]) is not int:
                 raise ValueError("fs_time_ns")
             target = data["target"]
@@ -798,7 +879,10 @@ class Worktree:
             raw_ops = data["ops"]
             if not isinstance(raw_ops, list):
                 raise ValueError("ops")
-            ops = [_Op.from_json(o, i, data["state"] != "staging") for i, o in enumerate(raw_ops)]
+            ops = [
+                _Op.from_json(o, i, data["state"] != "staging")
+                for i, o in enumerate(raw_ops)
+            ]
             done = data["done"]
             if type(done) is not int or not 0 <= done <= len(ops):
                 raise ValueError("done")
@@ -812,7 +896,9 @@ class Worktree:
     def _prepare_txn(self) -> None:
         # 作業域を空にする。old/ に残骸があれば、元のファイルの可能性があるので中止する。
         if self._list_dir(self._txn / "old"):
-            raise BvcError(f"作業域に前回の復元の残骸があります。{self._txn / 'old'} を確認してください")
+            raise BvcError(
+                f"作業域に前回の復元の残骸があります。{self._txn / 'old'} を確認してください"
+            )
         self._discard_dir(self._txn / "new")
 
     def _abandon(self, journal: dict) -> None:
@@ -837,7 +923,10 @@ class Worktree:
         # old/ は元のファイルの可能性があるので消さずに警告する。
         self._discard_dir(self._txn / "new")
         if self._list_dir(self._txn / "old"):
-            logger.warning("作業域に前回の復元の残骸があります。%s を確認してください", self._txn / "old")
+            logger.warning(
+                "作業域に前回の復元の残骸があります。%s を確認してください",
+                self._txn / "old",
+            )
 
     def _list_dir(self, d: Path) -> list[str]:
         try:
@@ -912,7 +1001,11 @@ class _Op:
         def pair(v: Any) -> tuple[int, int] | None:
             if v is None:
                 return None
-            if not isinstance(v, list) or len(v) != 2 or not all(type(x) is int for x in v):
+            if (
+                not isinstance(v, list)
+                or len(v) != 2
+                or not all(type(x) is int for x in v)
+            ):
                 raise ValueError("stat")
             return (v[0], v[1])
 

@@ -3,6 +3,7 @@
 import json
 import unittest
 from pathlib import Path
+from typing import Final
 from unittest import mock
 
 from bvc import fsutil
@@ -11,7 +12,7 @@ from bvc.history import History, check_branch_name
 from bvc.model import Head
 from tests import helpers
 
-SHA = "a" * 64
+SHA: Final[str] = "a" * 64
 
 
 def make_bvc(root: Path) -> Path:

@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
-ENV_RUN_SLOW = "BVC_RUN_SLOW"
-ENV_LONG_PATH = "BVC_TEST_LONG_PATH"
+from typing import Final
+
+ENV_RUN_SLOW: Final[str] = "BVC_RUN_SLOW"
+ENV_LONG_PATH: Final[str] = "BVC_TEST_LONG_PATH"
 
 _explicit_key = pytest.StashKey[bool]()
 

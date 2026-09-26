@@ -30,8 +30,8 @@ CHUNK_READ_SIZE: Final[int] = 1 << 20
 # 長さが分からないときの復号の上限(逐次処理なのでメモリは使わない)
 _NO_LIMIT: Final[int] = 1 << 62
 
-CHECKS: Final[tuple[str, str]] = ("exists", "full")
-HEALTH_KINDS: Final[tuple[str, str, str]] = ("bad_chunks", "bad_manifests", "bad_commits")
+CHECKS: Final[tuple[str, ...]] = ("exists", "full")
+HEALTH_KINDS: Final[tuple[str, ...]] = ("bad_chunks", "bad_manifests", "bad_commits")
 
 ProgressFn = Callable[[ProgressEvent], None]
 

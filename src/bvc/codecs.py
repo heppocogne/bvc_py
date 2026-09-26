@@ -16,7 +16,7 @@ AUTO_SAMPLE: Final[int] = 256 << 10
 AUTO_RATIO: Final[float] = 0.95
 ZLIB_LEVEL: Final[int] = 1
 
-POLICIES: Final[tuple[str, str, str]] = ("auto", "none", "zlib")
+POLICIES: Final[tuple[str, ...]] = ("auto", "none", "zlib")
 
 
 class Encoder(ABC):
@@ -59,8 +59,8 @@ class _RawEncoder(Encoder):
 
 
 class RawCodec(Codec):
-    id = 0
-    name = "raw"
+    id: ClassVar[int] = 0
+    name: ClassVar[str] = "raw"
 
     def encode(self, data: bytes) -> bytes:
         return data
@@ -90,8 +90,8 @@ class _ZlibEncoder(Encoder):
 
 
 class ZlibCodec(Codec):
-    id = 1
-    name = "zlib"
+    id: ClassVar[int] = 1
+    name: ClassVar[str] = "zlib"
 
     def encode(self, data: bytes) -> bytes:
         return zlib.compress(data, ZLIB_LEVEL)
@@ -135,9 +135,9 @@ class ZlibCodec(Codec):
             raise CorruptData("圧縮データが途中で途切れています")
 
 
-_CODECS: tuple[Codec, ...] = (RawCodec(), ZlibCodec())
-CODECS_BY_ID: dict[int, Codec] = {c.id: c for c in _CODECS}
-CODECS_BY_NAME: dict[str, Codec] = {c.name: c for c in _CODECS}
+_CODECS: Final[tuple[Codec, ...]] = (RawCodec(), ZlibCodec())
+CODECS_BY_ID: Final[dict[int, Codec]] = {c.id: c for c in _CODECS}
+CODECS_BY_NAME: Final[dict[str, Codec]] = {c.name: c for c in _CODECS}
 
 
 def get_codec(codec_id: int) -> Codec:
