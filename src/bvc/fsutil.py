@@ -34,6 +34,11 @@ _fault_hook: Callable[[str], None] | None = None
 # 現在の形式番号
 FORMAT: Final[int] = 1
 
+# リポジトリの管理フォルダ名。repo 層で定義していたものを、
+# 依存方向(上位→下位)を保つため最下層のこのモジュールに置く。
+# 上位の層はこの定数を使うこと。比較時は casefold() で比べること(Windows 対応)。
+BVC_DIR: Final[str] = ".bvc"
+
 
 def fault(stage: str) -> None:
     # 障害注入の地点。テストが _fault_hook を差し込んだときだけ、それを呼び出す。
@@ -82,8 +87,17 @@ def _strip_prefix(p: str) -> str:
     return p
 
 
+def real_path(p: str | os.PathLike[str]) -> Path:
+    # realpath の結果(\\?\ を外したもの)。長いパスでも使える。
+    return Path(_strip_prefix(os.path.realpath(os_path(p))))
+
+
+def is_dir(p: str | os.PathLike[str]) -> bool:
+    return os.path.isdir(os_path(p))
+
+
 def _real(p: str | os.PathLike[str]) -> str:
-    r = _strip_prefix(os.path.realpath(os_path(p)))
+    r = str(real_path(p))
     return os.path.normcase(r) if IS_WINDOWS else r
 
 
@@ -91,8 +105,11 @@ def same_or_inside(root: str | os.PathLike[str], p: str | os.PathLike[str]) -> b
     # p が root と同じか、その内側にあるか。
     # 両側を realpath してから比べる(ネットワークドライブ・subst が UNC に書き換わるため)。
     # Windows では大文字小文字を区別しない。
-    r = _real(root)
-    q = _real(p)
+    return _inside(_real(root), _real(p))
+
+
+def _inside(r: str, q: str) -> bool:
+    # realpath 済みの q が r と同じか、その内側にあるか。
     if q == r:
         return True
     return q.startswith(r.rstrip(os.sep) + os.sep)
@@ -107,7 +124,7 @@ def is_link_or_reparse(st: os.stat_result) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 記録された値の検査(仕様書 2.9節、設計書 4.10節、I-6)
+# 記録された値の検査(仕様書 2.10節、設計書 4.10節、I-6)
 # ---------------------------------------------------------------------------
 
 _SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
@@ -115,7 +132,7 @@ _ID_STR_RE: Final[re.Pattern[str]] = re.compile(r"0|[1-9][0-9]{0,15}")
 MAX_ID: Final[int] = 10**15
 _INVALID_CHARS: Final[frozenset[str]] = frozenset('<>:"|?*\\')
 _RESERVED: Final[frozenset[str]] = frozenset(
-    ["CON", "PRN", "AUX", "NUL"]
+    ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
     + [f"COM{c}" for c in "0123456789¹²³"]
     + [f"LPT{c}" for c in "0123456789¹²³"]
 )
@@ -157,7 +174,7 @@ def _check_element(e: str, p: str) -> None:
 def check_relpath(p: Any) -> str:
     # 記録された相対パスを検査し、NFC に正規化して返す。不正なら UnsafePath。
     # '/' 区切りで、絶対パス・ドライブ指定・UNC・'\\'・'.'・'..'・空の要素・先頭の '.bvc'・
-    # 予約名・末尾のドットと空白・使用できない文字を含まないこと(仕様書 2.9節)。
+    # 予約名・末尾のドットと空白・使用できない文字を含まないこと(仕様書 2.10節)。
     # OS によらず同じ規則で検査する。
     if type(p) is not str or not p:
         raise UnsafePath(f"パスが空か文字列ではありません: {p!r:.80}")
@@ -167,8 +184,8 @@ def check_relpath(p: Any) -> str:
     elements = p.split("/")
     for e in elements:
         _check_element(e, p)
-    if elements[0].casefold() == ".bvc":
-        raise UnsafePath(f".bvc の中は指定できません: {p!r}", path=p)
+    if elements[0].casefold() == BVC_DIR.casefold():
+        raise UnsafePath(f"{BVC_DIR} の中は指定できません: {p!r}", path=p)
     return p
 
 
@@ -192,8 +209,13 @@ def resolve_in_workdir(workdir: str | os.PathLike[str], rel: str) -> Path:
         if i < len(parts) - 1 and not stat.S_ISDIR(st.st_mode):
             raise UnsafePath(f"パスの途中がフォルダではありません: {rel!r}", path=rel)
     target = workdir.joinpath(*parts)
-    if not same_or_inside(workdir, target) or _real(target) == _real(workdir):
+    real_work, real_target = _real(workdir), _real(target)
+    if not _inside(real_work, real_target) or real_target == real_work:
         raise UnsafePath(f"作業フォルダの外を指しています: {rel!r}", path=rel)
+    # Windows の 8.3 形式の短い名前(BVC~1 など)は、名前の検査を通っても .bvc と同じ実体を指す。
+    # realpath は長い名前に直すので、それで確かめる(M4-12)
+    if _inside(_real(workdir / BVC_DIR), real_target):
+        raise UnsafePath(f"{BVC_DIR} の中を指しています: {rel!r}", path=rel)
     return target
 
 

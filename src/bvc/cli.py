@@ -16,6 +16,7 @@ from typing import Any, ClassVar, Final
 
 from . import __version__
 from .errors import BvcError, SafetyAbort, UsageError
+from .fsutil import BVC_DIR
 from .model import (
     BranchInfo,
     Commit,
@@ -97,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="<パス>",
         type=Path,
         default=None,
-        help="作業フォルダを指定する(省略時はカレントから上位へ .bvc を探す)",
+        help=f"作業フォルダを指定する(省略時はカレントから上位へ {BVC_DIR} を探す)",
     )
     parser.add_argument("--json", action="store_true", help="結果を JSON で出力する")
     parser.add_argument(

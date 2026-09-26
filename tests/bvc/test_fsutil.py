@@ -217,11 +217,11 @@ class TestChecks(unittest.TestCase):
         self.assertEqual(fsutil.check_relpath(nfd), "\u30d1.bin")
 
     def test_check_relpath_bad(self):
-        # P-1(単体): 仕様書 2.9節の規則
+        # P-1(単体): 仕様書 2.10節の規則
         bad = [
             "", "/abs", "../x", "a/../x", "a/..", "./a", "a/./b", "a//b", "a/", "C:", "C:/x",
             "C:\\x", "\\\\server\\x", "a\\b", ".bvc", ".bvc/config.json", ".BVC/x",
-            "CON", "con.txt", "a/NUL", "COM1.bin", "LPT9", "com\u00b9", "a.", "a ", "a./b",
+            "CON", "con.txt", "a/NUL", "CONIN$", "conout$.bin", "COM1.bin", "LPT9", "com\u00b9", "a.", "a ", "a./b",
             "a<b", "a>b", "a\"b", "a|b", "a?b", "a*b", "a\x00b", "a\x1fb", "a\x7fb", "a\nb",
             None, 1, b"a",
         ]
@@ -274,6 +274,30 @@ class TestResolveInWorkdir(helpers.TempDirTestCase):
             self.skipTest("ジャンクションを作れない")
         with self.assertRaises(UnsafePath):
             fsutil.resolve_in_workdir(self.work, "junc/x.bin")
+
+    @unittest.skipUnless(os.name == "nt", "Windows 固有")
+    def test_short_name_alias_of_bvc(self):
+        # P-1(M4-12): 8.3 形式の短い名前は名前の検査を通るが、.bvc と同じ実体を指す
+        (self.work / ".bvc").mkdir()
+        alias = self.work / "BVC~1"
+        if not alias.exists() or fsutil.real_path(alias) != self.work / ".bvc":
+            self.skipTest("8.3 形式の短い名前が作られない環境")
+        for rel in ("BVC~1", "BVC~1/x.bin", "BVC~1/sub/x.bin", "bvc~1/x.bin"):
+            with self.subTest(rel=rel), self.assertRaises(UnsafePath):
+                fsutil.resolve_in_workdir(self.work, rel)
+        # 同じ名前でも .bvc の別名でなければ通る
+        (self.work / "Long Folder Name").mkdir()
+        self.assertEqual(
+            fsutil.resolve_in_workdir(self.work, "LONGFO~1/x.bin"), self.work / "LONGFO~1" / "x.bin"
+        )
+
+    def test_real_path_and_is_dir(self):
+        self.assertEqual(fsutil.real_path(self.work / "a" / ".." / "b"), self.work / "b")
+        self.assertTrue(fsutil.is_dir(self.work))
+        self.assertFalse(fsutil.is_dir(self.work / "none"))
+        with mock.patch.object(fsutil, "LONG_PATH_THRESHOLD", 0):
+            self.assertEqual(fsutil.real_path(self.work), self.work)  # \\?\ を外して返す
+            self.assertTrue(fsutil.is_dir(self.work))
 
 
 class TestLongPath(helpers.TempDirTestCase):

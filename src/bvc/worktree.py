@@ -25,6 +25,7 @@ from .errors import (
     UsageError,
 )
 from .fsutil import (
+    BVC_DIR,
     IS_WINDOWS,
     atomic_write_json,
     check_id,
@@ -136,7 +137,7 @@ class Worktree:
                     f"フォルダを読み取れません: {rel_dir or '.'}({e})", path=rel_dir
                 ) from e
             for e in entries:
-                if not rel_dir and e.name.casefold() == ".bvc":
+                if not rel_dir and e.name.casefold() == BVC_DIR.casefold():
                     continue
                 raw = f"{rel_dir}/{e.name}" if rel_dir else e.name
                 try:
@@ -562,7 +563,7 @@ class Worktree:
         except OSError:
             return out
         for e in entries:
-            if not rel_dir and e.name.casefold() == ".bvc":
+            if not rel_dir and e.name.casefold() == BVC_DIR.casefold():
                 continue
             rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
             if unicodedata.normalize("NFC", rel).casefold() in tracked:
@@ -608,7 +609,7 @@ class Worktree:
             except OSError:
                 continue
             for e in entries:
-                if not rel_dir and e.name.casefold() == ".bvc":
+                if not rel_dir and e.name.casefold() == BVC_DIR.casefold():
                     continue
                 rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
                 try:

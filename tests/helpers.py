@@ -40,6 +40,66 @@ def _apply_long_path_setting() -> None:
 _apply_long_path_setting()
 
 
+# Windows の LongPathsEnabled が無効な環境の模擬(M4-12、P-6)。
+# 監査フック(sys.addaudithook)で、\\?\ の付かない長いパスを OS に渡す操作を失敗させる。
+# 監査イベントの無い操作(os.stat, os.lstat, os.path.realpath など)は検出できない。
+# フックは外せないため、一度だけ登録してフラグで有効・無効を切り替える。
+_MAX_PATH: Final[int] = 260
+_MAX_DIR_PATH: Final[int] = 248  # CreateDirectoryW の上限(MAX_PATH - 12)
+_PATH_ARGS: Final[dict[str, tuple[int, ...]]] = {
+    "open": (0,),
+    "os.mkdir": (0,),
+    "os.remove": (0,),
+    "os.rmdir": (0,),
+    "os.rename": (0, 1),
+    "os.scandir": (0,),
+    "os.listdir": (0,),
+    "os.chmod": (0,),
+    "os.utime": (0,),
+    "os.truncate": (0,),
+    "os.link": (0, 1),
+    "os.symlink": (0, 1),
+    "shutil.rmtree": (0,),
+    "shutil.copyfile": (0, 1),
+}
+_no_long_paths = False
+_long_path_hook_added = False
+
+
+def _long_path_hook(event: str, args: tuple) -> None:
+    if not _no_long_paths:
+        return
+    indexes = _PATH_ARGS.get(event)
+    if indexes is None:
+        return
+    for i in indexes:
+        if i >= len(args) or not isinstance(args[i], (str, bytes, os.PathLike)):
+            continue  # ファイル記述子・None
+        p = os.fsdecode(os.fspath(args[i]))
+        if p.startswith("\\\\?\\"):
+            continue
+        limit = _MAX_DIR_PATH if event == "os.mkdir" else _MAX_PATH
+        if len(os.path.abspath(p)) >= limit:
+            raise FileNotFoundError(3, "長いパスは使えません(LongPathsEnabled 無効の模擬)", p)
+
+
+class no_long_paths:
+    # with 文の中だけ、LongPathsEnabled が無効な環境を模擬する(Windows のみ意味がある)。
+
+    def __enter__(self) -> None:
+        global _no_long_paths, _long_path_hook_added
+        if not _long_path_hook_added:
+            import sys
+
+            sys.addaudithook(_long_path_hook)
+            _long_path_hook_added = True
+        _no_long_paths = True
+
+    def __exit__(self, *exc: object) -> None:
+        global _no_long_paths
+        _no_long_paths = False
+
+
 # ---------------------------------------------------------------------------
 # slow(実装計画書 6.5節、I-15)
 # ---------------------------------------------------------------------------

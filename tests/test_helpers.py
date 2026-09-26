@@ -19,6 +19,24 @@ class TestHelpers(helpers.TempDirTestCase):
         helpers.remove_tree(d)
         self.assertFalse(d.exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows 固有")
+    def test_no_long_paths(self):
+        # LongPathsEnabled 無効の模擬: \\?\ の無い長いパスだけ失敗させ、with の外では何もしない
+        long_dir = self.tmp.joinpath(*(["d" * 60] * 5))
+        prefixed = "\\\\?\\" + str(long_dir)
+        with helpers.no_long_paths():
+            with self.assertRaises(FileNotFoundError):
+                os.makedirs(long_dir)
+            os.makedirs(prefixed)
+            with open(prefixed + "\\f.bin", "wb") as f:
+                f.write(b"x")
+            with self.assertRaises(FileNotFoundError):
+                open(long_dir / "f.bin", "rb")
+            with self.assertRaises(FileNotFoundError):
+                os.listdir(long_dir)
+            self.assertEqual(os.listdir(self.tmp), ["d" * 60])  # 短いパスはそのまま
+        self.assertFalse(helpers._no_long_paths)  # with の外では無効
+
     def test_random_file_is_deterministic(self):
         a = helpers.write_random_file(self.tmp / "a.bin", (1 << 20) + 3, seed=1)
         b = helpers.write_random_file(self.tmp / "x" / "b.bin", (1 << 20) + 3, seed=1)

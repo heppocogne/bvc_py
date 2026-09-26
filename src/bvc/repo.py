@@ -23,7 +23,7 @@ from .errors import (
     UnsafePath,
     UsageError,
 )
-from .fsutil import FileLock, atomic_write_json, check_relpath, compile_glob, load_json
+from .fsutil import BVC_DIR, FileLock, atomic_write_json, check_relpath, compile_glob, load_json
 from .history import History, check_branch_name
 from .model import (
     BranchInfo,
@@ -46,7 +46,7 @@ from .worktree import Worktree
 
 logger = logging.getLogger(__name__)
 
-BVC_DIR: Final[str] = ".bvc"
+# BVC_DIR は fsutil から import して再公開する(後方互換のため repo.BVC_DIR も使える)。
 # {"name": "fixed", "size": "4M"}のような書き方も許容するため、Anyを使う
 DEFAULT_CHUNKER: Final[dict[str, Any]] = {"name": "fixed", "size": 4194304}
 _SUBDIRS: Final[tuple[str, ...]] = (
@@ -215,9 +215,9 @@ class Repo:
     @staticmethod
     def find_workdir(start: Path) -> Path | None:
         # start から上位へ .bvc を探し、それを含むフォルダを返す(M2-2)。
-        current = Path(start).resolve()
+        current = fsutil.real_path(start)
         while True:
-            if (current / BVC_DIR).is_dir():
+            if fsutil.is_dir(current / BVC_DIR):
                 return current
             if current.parent == current:
                 return None
@@ -236,8 +236,8 @@ class Repo:
         # 新しいリポジトリを作り、その時点の追跡ファイルを版 0(kind=init)として記録する(M2-10)。
         if git:
             raise UsageError("git 連携は M6 で実装します")
-        workdir = Path(workdir).resolve()
-        if not workdir.is_dir():
+        workdir = fsutil.real_path(workdir)
+        if not fsutil.is_dir(workdir):
             raise BvcError(f"作業フォルダがありません: {workdir}")
         config_data = {
             "format": 1,
@@ -256,14 +256,14 @@ class Repo:
             raise BvcError(f"すでにリポジトリがあります: {found / BVC_DIR}")
 
         bvc_dir = workdir / BVC_DIR
-        bvc_dir.mkdir()
+        os.mkdir(fsutil.os_path(bvc_dir))
         # 作ったばかりの .bvc だけを片付けの対象にする(作業ファイルには触れない)
         lock = FileLock(bvc_dir / "lock")
         repo: Repo | None = None
         try:
             lock.acquire()
             for d in _SUBDIRS:
-                (bvc_dir / d).mkdir()
+                os.mkdir(fsutil.os_path(bvc_dir / d))
             tmp = bvc_dir / "tmp"
             atomic_write_json(bvc_dir / "config.json", config_data, tmp)
             atomic_write_json(
@@ -310,7 +310,7 @@ class Repo:
             if repo is not None:
                 repo._store.close()
             lock.release()
-            shutil.rmtree(bvc_dir, ignore_errors=True)
+            shutil.rmtree(fsutil.os_path(bvc_dir), ignore_errors=True)
             raise
         return repo
 
@@ -320,7 +320,7 @@ class Repo:
         workdir = cls.find_workdir(start)
         if workdir is None:
             raise BvcError(
-                f"リポジトリが見つかりません({Path(start).resolve()} とその上位に .bvc がありません)"
+                f"リポジトリが見つかりません({fsutil.real_path(start)} とその上位に {BVC_DIR} がありません)"
             )
         bvc_dir = workdir / BVC_DIR
         lock = FileLock(bvc_dir / "lock")
@@ -412,7 +412,7 @@ class Repo:
         living = [c for c in h.living() if h.tree_known(c.id)]
         if not living:
             raise BvcError(
-                "HEAD.json を復旧できません(読み込める版がありません)。.bvc/commits を確認してください"
+                f"HEAD.json を復旧できません(読み込める版がありません)。{BVC_DIR}/commits を確認してください"
             )
         tree = self._worktree.state(base_tree={}, store_chunks=False, find_hints=False).tree
         for c in living:  # 新しい順

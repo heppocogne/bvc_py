@@ -32,7 +32,13 @@ def check_branch_name(name: Any) -> str:
     # 仕様書 2.3節のブランチ名の制約。数字だけ・'@' で始まる・'+' '-' を含む・空白を含む名前は不可。
     if type(name) is not str or not name:
         raise RevisionError(f"ブランチ名が空か文字列ではありません: {name!r:.80}")
-    if name.isdigit() or name.startswith("@") or "+" in name or "-" in name or any(c.isspace() for c in name):
+    if (
+        name.isdigit()
+        or name.startswith("@")
+        or "+" in name
+        or "-" in name
+        or any(c.isspace() for c in name)
+    ):
         raise RevisionError(f"ブランチ名に使えない形式です: {name!r}")
     return name
 
@@ -58,9 +64,13 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
     if commit_id != file_id:
         raise CorruptData(f"版 {file_id}: ファイル名と番号が一致しません({commit_id})")
     # 祖先は自分より小さい番号だけ(壊れたデータでグラフが循環しないように)
-    if parent is not None and (parent >= commit_id or not ancestors or ancestors[0] != parent):
+    if parent is not None and (
+        parent >= commit_id or not ancestors or ancestors[0] != parent
+    ):
         raise CorruptData(f"版 {file_id}: 親の記録が不正です")
-    if any(b >= a for a, b in zip(ancestors, ancestors[1:])) or any(a >= commit_id for a in ancestors):
+    if any(b >= a for a, b in zip(ancestors, ancestors[1:])) or any(
+        a >= commit_id for a in ancestors
+    ):
         raise CorruptData(f"版 {file_id}: 祖先の記録が不正です")
     if (
         type(time) is not str
@@ -72,12 +82,30 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
     ):
         raise CorruptData(f"版 {file_id}: 内容が不正です")
 
-    # パスとハッシュは使う前に検査する(仕様書 2.9節)。不正なら「壊れた版」
+    # パスとハッシュは使う前に検査する(仕様書 2.10節)。不正なら「壊れた版」
+    # bvc は NFC で記録するので、正規化で変わるパスも不正とする(同じパスの重複を黙って1つにしないため)
     bad_tree = False
     checked: dict[str, str] = {}
     for path, sha in tree.items():
         try:
-            checked[check_relpath(path)] = check_sha(sha)
+            if check_relpath(path) != path:
+                raise UnsafePath("")
+            checked[path] = check_sha(sha)
+        except UnsafePath:
+            bad_tree = True
+    # 名前変更の記録は表示用だが、パスなので同じ規則で検査する
+    checked_renames: list[tuple[str, str, float]] = []
+    for r in renames:
+        try:
+            if (
+                not isinstance(r, list)
+                or len(r) != 3
+                or any(check_relpath(p) != p for p in r[:2])
+                or type(r[2]) not in (int, float)
+                or not 0 <= r[2] <= 1
+            ):
+                raise UnsafePath("")
+            checked_renames.append((r[0], r[1], r[2]))
         except UnsafePath:
             bad_tree = True
     commit = Commit(
@@ -89,7 +117,7 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
         kind=kind,
         message=message,
         tree=checked,
-        renames=tuple(tuple(r) for r in renames if isinstance(r, list)),
+        renames=tuple(checked_renames),
         stats=stats,
     )
     return commit, bad_tree
@@ -123,8 +151,8 @@ class History:
         self._discarded: set[int] = set()
         self._branches: dict[int, str] = {}
         self._pins: list[dict] = []
-        self._chain: dict[int, tuple[int, ...]] = {}   # 版 → 親から根への番号列
-        self._eparent: dict[int, int | None] = {}
+        self._chain: dict[int, tuple[int, ...]] = {}  # 版 → 親から根への番号列
+        self._eparent: dict[int, int | None] = {}  # effective parent; 有効な親コミット
         self._children: dict[int, list[int]] = {}
 
     # --- 読み込み ---
@@ -132,13 +160,15 @@ class History:
     def load(self) -> None:
         # commits/, discarded.jsonl, branches.json, pins.jsonl を読む(M2-3)。
         commits_dir = self._bvc_dir / "commits"
-        with os.scandir(commits_dir) as it:
+        with os.scandir(os_path(commits_dir)) as it:
             names = [e.name for e in it if e.name.endswith(".json")]
         for name in names:
             try:
                 file_id = check_id_str(name[: -len(".json")])
             except UnsafePath:
-                logger.warning("commits/%s: 版ファイルの名前ではないため無視しました", name)
+                logger.warning(
+                    "commits/%s: 版ファイルの名前ではないため無視しました", name
+                )
                 continue
             try:
                 data = load_json(commits_dir / name, f"版 {file_id}")
@@ -150,17 +180,24 @@ class History:
                 continue
             self._commits[file_id] = commit
             if bad_tree:
-                logger.warning("版 %d: 不正なパスまたはハッシュを含みます(壊れた版として扱います)", file_id)
+                logger.warning(
+                    "版 %d: 不正なパスまたはハッシュを含みます(壊れた版として扱います)",
+                    file_id,
+                )
                 self._broken.add(file_id)
 
-        records, warns = read_jsonl(self._bvc_dir / "discarded.jsonl", "discarded.jsonl")
+        records, warns = read_jsonl(
+            self._bvc_dir / "discarded.jsonl", "discarded.jsonl"
+        )
         for w in warns:
             logger.warning("%s", w)
         for r in records:
             try:
                 self._discarded.add(check_id(r.get("id")))
             except UnsafePath:
-                logger.warning("discarded.jsonl: 不正な番号を読み飛ばしました: %r", r.get("id"))
+                logger.warning(
+                    "discarded.jsonl: 不正な番号を読み飛ばしました: %r", r.get("id")
+                )
 
         try:
             data = load_json(self._bvc_dir / "branches.json", "branches.json")
@@ -176,7 +213,9 @@ class History:
             try:
                 self._branches[check_id_str(bid_str)] = check_branch_name(name)
             except (UnsafePath, RevisionError):
-                logger.warning("branches.json: 不正な項目を読み飛ばしました: %r", bid_str)
+                logger.warning(
+                    "branches.json: 不正な項目を読み飛ばしました: %r", bid_str
+                )
 
         self._pins, warns = read_jsonl(self._bvc_dir / "pins.jsonl", "pins.jsonl")
         for w in warns:
@@ -195,7 +234,7 @@ class History:
             anc = chain[cid]
             for i, a in enumerate(anc):
                 if a not in chain:
-                    chain[a] = anc[i + 1:]
+                    chain[a] = anc[i + 1 :]
         self._chain = chain
 
         self._eparent = {}
@@ -300,7 +339,9 @@ class History:
     def tree_known(self, commit_id: int) -> bool:
         # 版の tree を全部把握できているか(版ファイルが読めて、不正なパス・ハッシュが無い)。
         # gc が「参照されていない」と判断してよいかの基準にする。
-        return self._commits.get(commit_id) is not None and commit_id not in self._broken
+        return (
+            self._commits.get(commit_id) is not None and commit_id not in self._broken
+        )
 
     def get_notes(self, commit_id: int) -> list[Note]:
         # コメント(notes/<id>.jsonl)を古い順に返す(M4-1)。壊れた行は読み飛ばす(C-8)。
@@ -380,7 +421,9 @@ class History:
             return kids[0]
         if not kids:
             raise RevisionError(f"{expr}: 版 {cur} は先端なので子がありません")
-        raise RevisionError(f"{expr}: 版 {cur} には子が複数あり、進む先を決められません({kids})")
+        raise RevisionError(
+            f"{expr}: 版 {cur} には子が複数あり、進む先を決められません({kids})"
+        )
 
     # --- HEAD ---
 
@@ -454,9 +497,11 @@ class History:
             stats=dict(stats or {}),
         )
         commit_file = self._bvc_dir / "commits" / f"{commit_id}.json"
-        if commit_file.exists():
+        if os.path.lexists(os_path(commit_file)):
             # 版は不変。既存の版ファイルは決して上書きしない
-            raise IntegrityError(f"版 {commit_id} のファイルが既にあります。counters.json と版の記録が一致しません")
+            raise IntegrityError(
+                f"版 {commit_id} のファイルが既にあります。counters.json と版の記録が一致しません"
+            )
 
         atomic_write_json(
             counters_file,
@@ -471,7 +516,9 @@ class History:
 
     def log_op(self, entry: dict) -> None:
         # 操作ログ(oplog.jsonl)に1行追記する(M2-6、設計書 2.6節)。
-        append_jsonl(self._bvc_dir / "oplog.jsonl", {"format": 1, "time": now_iso(), **entry})
+        append_jsonl(
+            self._bvc_dir / "oplog.jsonl", {"format": 1, "time": now_iso(), **entry}
+        )
 
     # --- note / discard / branch(M4-1〜M4-3) ---
 
@@ -491,7 +538,10 @@ class History:
             raise RevisionError(f"版 {commit_id} は存在しません")
         if commit_id in self._discarded:
             raise RevisionError(f"版 {commit_id} は削除済みです")
-        append_jsonl(self._bvc_dir / "discarded.jsonl", {"format": 1, "time": now_iso(), "id": commit_id})
+        append_jsonl(
+            self._bvc_dir / "discarded.jsonl",
+            {"format": 1, "time": now_iso(), "id": commit_id},
+        )
         self._discarded.add(commit_id)
         self._rebuild()
 
@@ -583,7 +633,9 @@ class History:
         # 版・削除印・操作ログに現れる最大の番号から counters.json を作り直す(load の後に呼び出す)。
         # gc で消えた版の番号も、削除印と操作ログに残っているので再利用しない。
         commit_ids = set(self._commits) | set(self._discarded)
-        branch_ids = {c.branch for c in self._commits.values() if c is not None} | set(self._branches)
+        branch_ids = {c.branch for c in self._commits.values() if c is not None} | set(
+            self._branches
+        )
         for r in self._oplog():
             for v in r.get("created") or ():
                 if type(v) is int and 0 <= v:
@@ -599,7 +651,9 @@ class History:
             "next_commit": max(commit_ids, default=-1) + 1,
             "next_branch": max(branch_ids, default=-1) + 1,
         }
-        atomic_write_json(self._bvc_dir / "counters.json", {"format": 1, **counters}, self._tmp)
+        atomic_write_json(
+            self._bvc_dir / "counters.json", {"format": 1, **counters}, self._tmp
+        )
         return counters
 
     def check_head(self) -> str | None:
@@ -623,7 +677,9 @@ class History:
             if not isinstance(after, dict):
                 continue
             try:
-                head = Head(at=check_id(after.get("at")), branch=check_id(after.get("branch")))
+                head = Head(
+                    at=check_id(after.get("at")), branch=check_id(after.get("branch"))
+                )
             except UnsafePath:
                 return None
             if head.at in self._commits and head.at not in self._discarded:
