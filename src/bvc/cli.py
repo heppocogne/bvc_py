@@ -1,18 +1,25 @@
-# 引数解析・表示整形・終了コード・--json。設計書 1.1節・3.7節。
+# 引数解析・表示整形・終了コード・--json。設計書 1.1節・3.7節・3.9節、仕様書 2.11節。
 # 情報・警告・エラーのメッセージは logging で出す(情報は stdout、警告以上は stderr)。
-# コマンドの結果そのもの(log の表示、--json、--version)は stdout へ print する。
+# コマンドの結果そのもの(log の表示、--json、--version)は stdout へ書く。
+# --json では、結果・警告(warnings)・エラーをすべて stdout の1つの JSON にまとめる(M5-1, M5-3)。
+# 進捗は、標準エラーが端末のときだけ表示する(M5-2)。
 
 from __future__ import annotations
 
 import argparse
+import codecs
+import dataclasses
 import json
 import logging
+import shutil
 import sys
+import time
+import traceback
 import unicodedata
-from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import Any, ClassVar, Final
+from functools import lru_cache
+from pathlib import PurePath, Path
+from typing import Any, ClassVar, Final, TextIO
 
 from . import __version__
 from .errors import BvcError, SafetyAbort, UsageError
@@ -20,11 +27,11 @@ from .fsutil import BVC_DIR
 from .model import (
     BranchInfo,
     Commit,
-    CommitResult,
     DiscardResult,
     GcReport,
     LogEntry,
     MoveResult,
+    ProgressEvent,
     VerifyReport,
     WorkState,
 )
@@ -60,24 +67,266 @@ class _Formatter(logging.Formatter):
         return f"{prefix}: {msg}" if prefix else msg
 
 
-def setup_logging(quiet: bool = False) -> None:
+class _StreamHandler(logging.StreamHandler):
+    # 出力先の文字コードで表せない記号を置き換えてから書く(_fallback)。
+    def format(self, record: logging.LogRecord) -> str:
+        return _fallback(super().format(record), self.stream)
+
+
+class _WarningCollector(logging.Handler):
+    # --json のとき、警告以上のメッセージを集める(出力の "warnings" 配列。M5-3)。
+    def __init__(self, sink: list[str]) -> None:
+        super().__init__(logging.WARNING)
+        self.sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.sink.append(record.getMessage())
+
+
+class _ClearProgress(logging.Filter):
+    # メッセージを書く前に進捗の行を消す(進捗とメッセージが同じ行に混ざらないように)。
+    def __init__(self, view: ProgressView) -> None:
+        super().__init__()
+        self.view = view
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        self.view.clear()
+        return True
+
+
+def setup_logging(
+    quiet: bool = False,
+    warnings: list[str] | None = None,
+    progress: ProgressView | None = None,
+) -> None:
     # bvc パッケージのロガーの出力先を設定する。呼び出すたびに作り直す(その時点の sys.stdout/stderr を使う)。
+    # warnings を渡すと(--json)、画面には何も出さず、警告以上のメッセージをそこに集める。
     root = logging.getLogger("bvc")
     for h in list(root.handlers):
         root.removeHandler(h)
     root.setLevel(logging.INFO)
     root.propagate = False
+    if warnings is not None:
+        root.addHandler(_WarningCollector(warnings))
+        return
     fmt = _Formatter("%(message)s")
+    handlers: list[logging.Handler] = []
     if not quiet:
-        out = logging.StreamHandler(sys.stdout)
+        out = _StreamHandler(sys.stdout)
         out.setLevel(logging.INFO)
         out.addFilter(lambda r: r.levelno < logging.WARNING)
-        out.setFormatter(fmt)
-        root.addHandler(out)
-    err = logging.StreamHandler(sys.stderr)
+        handlers.append(out)
+    err = _StreamHandler(sys.stderr)
     err.setLevel(logging.WARNING)
-    err.setFormatter(fmt)
-    root.addHandler(err)
+    handlers.append(err)
+    for h in handlers:
+        h.setFormatter(fmt)
+        if progress is not None:
+            h.addFilter(_ClearProgress(progress))
+        root.addHandler(h)
+
+
+# ---------------------------------------------------------------------------
+# 出力の文字コード
+# ---------------------------------------------------------------------------
+
+# 表示に使う記号と、出力先の文字コードで表せないときの代わり(先頭から順に試す)。
+# パイプ・リダイレクト先が cp932 の場合など(M4-C の残課題)。
+_SYMBOL_FALLBACKS: Final[dict[str, tuple[str, ...]]] = {
+    "✗": ("×", "x"),
+    "╯": ("┘", "/"),
+    "├": ("|",),
+    "┼": ("+",),
+    "─": ("-",),
+    "│": ("|",),
+    "○": ("o",),
+    "→": ("->",),
+}
+
+
+@lru_cache(maxsize=None)
+def _symbol_table(encoding: str) -> dict[int, str]:
+    # encoding で表せない記号 → 代わりの文字列(str.translate 用)。
+    table: dict[int, str] = {}
+    for sym, alts in _SYMBOL_FALLBACKS.items():
+        for cand in (sym, *alts):
+            try:
+                cand.encode(encoding)
+            except UnicodeEncodeError:
+                continue
+            if cand != sym:
+                table[ord(sym)] = cand
+            break
+    return table
+
+
+def _encoding_of(stream: Any) -> str:
+    enc = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        return codecs.lookup(enc).name
+    except LookupError:
+        return "utf-8"
+
+
+def _fallback(text: str, stream: Any) -> str:
+    # 表示用の記号のうち、出力先で表せないものを置き換える。
+    return text.translate(_symbol_table(_encoding_of(stream)))
+
+
+def _prepare_streams() -> None:
+    # 出力先で表せない文字(ファイル名など)で UnicodeEncodeError にならないよう、'?' に置き換える設定にする。
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError, TypeError):
+            pass
+
+
+def _print_text(text: str) -> None:
+    print(_fallback(text, sys.stdout))
+
+
+# ---------------------------------------------------------------------------
+# 進捗表示(M5-2)
+# ---------------------------------------------------------------------------
+
+_STAGE_LABELS: Final[dict[str, str]] = {
+    "put": "保存",
+    "write": "展開",
+    "restore": "置き換え",
+    "verify_chunks": "チャンクの検査",
+    "verify_manifests": "マニフェストの検査",
+    "repair": "修復",
+    "gc": "削除",
+}
+# done・total がバイト数の段階(それ以外は件数)
+_BYTE_STAGES: Final[frozenset[str]] = frozenset({"put", "write"})
+# 表示を更新する最短の間隔(秒)。段階やファイルが変わったときはすぐに更新する
+PROGRESS_INTERVAL: Final[float] = 0.1
+
+
+class ProgressView:
+    # ProgressEvent を受けて、標準エラーの1行に進捗を上書き表示する。
+    # 端末でないとき・-q・--json では作らない(run の中で判断する)。
+
+    def __init__(self, stream: TextIO, interval: float = PROGRESS_INTERVAL) -> None:
+        self.stream = stream
+        self.interval = interval
+        self._last_time = 0.0
+        self._last_key: tuple[str, str | None] | None = None
+        self._shown = 0  # 表示中の行の幅(0 なら何も表示していない)
+
+    def __call__(self, ev: ProgressEvent) -> None:
+        now = time.monotonic()
+        key = (ev.stage, ev.path)
+        if key == self._last_key and now - self._last_time < self.interval:
+            return
+        self._last_key = key
+        self._last_time = now
+        self._show(format_progress(ev))
+
+    def _show(self, line: str) -> None:
+        cols = shutil.get_terminal_size((80, 24)).columns - 1
+        line = _truncate(_fallback(line, self.stream), max(cols, 10))
+        w = _width(line)
+        pad = " " * max(self._shown - w, 0)
+        self.stream.write(f"\r{line}{pad}")
+        self.stream.flush()
+        self._shown = w
+
+    def clear(self) -> None:
+        if self._shown:
+            self.stream.write("\r" + " " * self._shown + "\r")
+            self.stream.flush()
+            self._shown = 0
+        self._last_key = None
+
+
+def format_progress(ev: ProgressEvent) -> str:
+    label = _STAGE_LABELS.get(ev.stage, ev.stage)
+    if ev.stage in _BYTE_STAGES:
+        amount = format_size(ev.done)
+        if ev.total is not None:
+            amount += f" / {format_size(ev.total)}"
+    else:
+        amount = str(ev.done) if ev.total is None else f"{ev.done}/{ev.total}"
+    pct = f" ({ev.done * 100 // ev.total}%)" if ev.total else ""
+    path = f" {ev.path}" if ev.path else ""
+    return f"{label}{path}: {amount}{pct}"
+
+
+def _truncate(s: str, cols: int) -> str:
+    # 表示幅が cols を超えるなら、先頭を削って "…" を付ける(末尾の数値を残す)。
+    if _width(s) <= cols:
+        return s
+    out = ""
+    for ch in reversed(s):
+        if _width(out) + _width(ch) > cols - 1:
+            break
+        out = ch + out
+    return "…" + out
+
+
+# ---------------------------------------------------------------------------
+# --json(M5-1)
+# ---------------------------------------------------------------------------
+
+
+def to_jsonable(obj: Any) -> Any:
+    # 結果の dataclass を JSON に変換できる値にする(全コマンド共通)。
+    # dataclass はフィールドに加えて、公開のプロパティ(WorkState.dirty, VerifyReport.ok など)も含める。
+    # タプルはリスト、Path は文字列、辞書のキーは文字列にする。
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        out = {f.name: to_jsonable(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+        for name in _public_properties(type(obj)):
+            out[name] = to_jsonable(getattr(obj, name))
+        return out
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return sorted((to_jsonable(v) for v in obj), key=str)
+    if isinstance(obj, PurePath):
+        return str(obj)
+    return str(obj)
+
+
+@lru_cache(maxsize=None)
+def _public_properties(cls: type) -> tuple[str, ...]:
+    names = []
+    for klass in reversed(cls.__mro__):
+        for name, value in vars(klass).items():
+            if isinstance(value, property) and not name.startswith("_") and name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+def _print_json(args: argparse.Namespace, result: Any) -> None:
+    # 結果を1つの JSON として stdout に書く。"changed" と "warnings" を必ず含める(仕様書 2.2節・5節)。
+    data = to_jsonable(result)
+    if not isinstance(data, dict) or "changed" not in data:
+        raise TypeError(f"--json の出力に changed がありません: {type(result).__name__}")
+    data["warnings"] = list(getattr(args, "warnings", None) or ())
+    # 出力先が UTF-8 でなければ ASCII だけで書く(\\uXXXX。どの文字コードでも解析できる)
+    ascii_only = _encoding_of(sys.stdout) not in ("utf-8", "utf-16", "utf-32")
+    print(json.dumps(data, ensure_ascii=ascii_only, indent=2))
+
+
+def _error_json(e: BaseException, exit_code: int, message: str | None = None) -> dict:
+    details = e.details if isinstance(e, BvcError) else {}
+    return {
+        "changed": False,
+        "error": message if message is not None else str(e),
+        "type": type(e).__name__,
+        "exit_code": exit_code,
+        "details": details,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +334,18 @@ def setup_logging(quiet: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    # 引数の誤りを SystemExit ではなく UsageError で報告する(--json でも JSON で返すため)。
+    # usage はそのサブコマンドのもの(details には入れず、テキスト表示のときだけ使う)。
+    def error(self, message: str) -> None:  # type: ignore[override]
+        e = UsageError(message)
+        e.usage = self.format_usage()  # type: ignore[attr-defined]
+        raise e
+
+
 def build_parser() -> argparse.ArgumentParser:
-    # argparse を構成する(M2-11)。
-    parser = argparse.ArgumentParser(
+    # argparse を構成する(M2-11)。サブコマンドのパーサも _ArgumentParser になる。
+    parser = _ArgumentParser(
         prog="bvc",
         description="大容量バイナリファイル向けのローカル専用バージョン管理ツール",
         add_help=False,
@@ -195,67 +453,88 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(argv: list[str] | None = None) -> int:
     # 引数を解析してコマンドを実行し、終了コードを返す(M2-11、仕様書 2.2節)。
+    _prepare_streams()
     parser = build_parser()
+    raw = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(raw)
     except SystemExit as e:
+        # サブコマンドの --help など
         return e.code if isinstance(e.code, int) else EXIT_USAGE
+    except UsageError as e:
+        # 解析できなかったので、共通オプションの --json は引数の並びから判断する
+        args = argparse.Namespace(json="--json" in raw, quiet="-q" in raw)
+        args.warnings = [] if args.json else None
+        setup_logging(quiet=args.quiet, warnings=args.warnings)
+        return _report_error(args, e, usage=getattr(e, "usage", None))
 
-    setup_logging(quiet=args.quiet or args.json)
+    args.warnings = [] if args.json else None
+    view = None
+    if not (args.quiet or args.json) and _isatty(sys.stderr):
+        view = ProgressView(sys.stderr)
+    args.progress = view
+    setup_logging(quiet=args.quiet, warnings=args.warnings, progress=view)
 
     if args.help:
         parser.print_help()
         return EXIT_OK
     if args.version:
-        print(f"bvc {__version__}")
+        if args.json:
+            _print_json(args, {"changed": False, "version": __version__})
+        else:
+            print(f"bvc {__version__}")
         return EXIT_OK
     if not args.command:
-        parser.print_usage(sys.stderr)
-        logger.error("コマンドを指定してください")
-        return EXIT_USAGE
+        return _report_error(
+            args, UsageError("コマンドを指定してください"), usage=parser.format_usage()
+        )
 
     start = args.workdir if args.workdir is not None else Path.cwd()
     try:
-        if args.command == "init":
-            return _cmd_init(args, start)
-        if args.command == "commit":
-            return _cmd_commit(args, start)
-        if args.command == "log":
-            return _cmd_log(args, start)
-        if args.command in ("undo", "redo", "goto"):
-            return _cmd_move(args, start)
-        if args.command == "note":
-            return _cmd_note(args, start)
-        if args.command == "branch":
-            return _cmd_branch(args, start)
-        if args.command == "discard":
-            return _cmd_discard(args, start)
-        if args.command == "gc":
-            return _cmd_gc(args, start)
-        if args.command == "verify":
-            return _cmd_verify(args, start)
-        logger.error("不明なコマンドです: %s", args.command)
-        return EXIT_USAGE
+        return _COMMANDS[args.command](args, start)
     except BvcError as e:
-        if args.json:
-            _print_json(
-                {
-                    "changed": False,
-                    "error": str(e),
-                    "type": type(e).__name__,
-                    "exit_code": e.exit_code,
-                    "details": e.details,
-                }
-            )
-        prefix = "中止" if isinstance(e, SafetyAbort) else None
-        logger.error("%s", e, extra={"prefix": prefix})
-        return e.exit_code
-    except KeyboardInterrupt:
-        logger.error("中断しました")
-        return EXIT_ABORT
+        return _report_error(args, e)
+    except KeyboardInterrupt as e:
+        return _report_error(args, e, EXIT_ABORT, "中断しました")
     except Exception as e:
-        logger.error("予期しないエラー: %s", e, exc_info=True)
-        return EXIT_ERROR
+        if args.json:
+            traceback.print_exc(file=sys.stderr)
+        else:
+            logger.error("予期しないエラー: %s", e, exc_info=True)
+        return _report_error(args, e, EXIT_ERROR, f"予期しないエラー: {e}", logged=True)
+    finally:
+        if view is not None:
+            view.clear()
+
+
+def _isatty(stream: Any) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _report_error(
+    args: argparse.Namespace,
+    e: BaseException,
+    exit_code: int | None = None,
+    message: str | None = None,
+    usage: str | None = None,
+    logged: bool = False,
+) -> int:
+    # エラーを報告して終了コードを返す。--json なら stdout に JSON、そうでなければ stderr にメッセージ。
+    if exit_code is None:
+        exit_code = e.exit_code if isinstance(e, BvcError) else EXIT_ERROR
+    if args.json:
+        _print_json(args, _error_json(e, exit_code, message))
+        return exit_code
+    if logged:
+        return exit_code
+    if usage:
+        sys.stderr.write(usage)
+    prefix = "中止" if isinstance(e, SafetyAbort) else None
+    logger.error("%s", message or e, extra={"prefix": prefix})
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -265,25 +544,20 @@ def run(argv: list[str] | None = None) -> int:
 
 def _cmd_init(args: argparse.Namespace, start: Path) -> int:
     workdir = start / args.path if args.path else start
-    with Repo.init(workdir, track=args.track, ignore=args.ignore) as repo:
+    with Repo.init(
+        workdir, track=args.track, ignore=args.ignore, progress=args.progress
+    ) as repo:
         entry = repo.log(limit=1)[0]
-    files = len(entry.commit.tree)
+    commit = entry.commit
     if args.json:
-        _print_json(
-            {
-                "changed": True,
-                "path": str(repo.workdir),
-                "commit": entry.id,
-                "files": files,
-            }
-        )
-    else:
-        logger.info(
-            "リポジトリを作成しました: %s(版 %d、追跡ファイル %d 件)",
-            repo.workdir,
-            entry.id,
-            files,
-        )
+        _print_json(args, {"changed": True, "workdir": repo.workdir, "commit": commit})
+        return EXIT_OK
+    logger.info(
+        "リポジトリを作成しました: %s(版 %d、追跡ファイル %d 件)",
+        repo.workdir,
+        entry.id,
+        len(commit.tree) if commit is not None else 0,
+    )
     return EXIT_OK
 
 
@@ -296,9 +570,14 @@ def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
             raise UsageError(f"--rename は 旧=新 の形式で指定してください: {spec}")
         renames.append((old, new))
     with Repo.open(start) as repo:
-        result = repo.commit(message=args.message, allow_missing=args.allow_missing, renames=renames)
+        result = repo.commit(
+            message=args.message,
+            allow_missing=args.allow_missing,
+            renames=renames,
+            progress=args.progress,
+        )
     if args.json:
-        _print_json(result)
+        _print_json(args, result)
         return EXIT_OK
     if not result.changed:
         logger.info("変更なし")
@@ -325,23 +604,9 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
             logger.warning("未コミットの変更を確認できません: %s", e)
             state = None
     if args.json:
-        _print_json(
-            {
-                "changed": False,
-                "uncommitted": None
-                if state is None
-                else {
-                    "modified": state.modified,
-                    "added": state.added,
-                    "renamed": [list(r) for r in state.renamed],
-                    "missing": state.missing,
-                    "hints": state.hints,
-                },
-                "entries": [_entry_to_dict(e) for e in entries],
-            }
-        )
+        _print_json(args, {"changed": False, "uncommitted": state, "entries": entries})
     else:
-        print(format_log(entries, state))
+        _print_text(format_log(entries, state))
     return EXIT_OK
 
 
@@ -349,16 +614,24 @@ def _cmd_move(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
         if args.command == "undo":
             result = repo.undo(
-                reason=args.reason, allow_missing=args.allow_missing, skip_broken=args.skip_broken
+                reason=args.reason,
+                allow_missing=args.allow_missing,
+                skip_broken=args.skip_broken,
+                progress=args.progress,
             )
         elif args.command == "redo":
             result = repo.redo(
-                reason=args.reason, allow_missing=args.allow_missing, skip_broken=args.skip_broken
+                reason=args.reason,
+                allow_missing=args.allow_missing,
+                skip_broken=args.skip_broken,
+                progress=args.progress,
             )
         else:
-            result = repo.goto(args.rev, allow_missing=args.allow_missing)
+            result = repo.goto(
+                args.rev, allow_missing=args.allow_missing, progress=args.progress
+            )
     if args.json:
-        _print_json(result)
+        _print_json(args, result)
         return EXIT_OK
     for line in format_move(result):
         logger.info("%s", line)
@@ -370,7 +643,7 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
         note = repo.note(args.text, rev=args.rev)
         commit = repo.get_commit(note.commit_id)
     if args.json:
-        _print_json({"changed": True, "note": asdict(note)})
+        _print_json(args, {"changed": True, "note": note})
     else:
         logger.info("版 %d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit))
     return EXIT_OK
@@ -386,12 +659,12 @@ def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
             info = repo.unname_branch(args.name)
     if args.branch_command is None:
         if args.json:
-            _print_json({"changed": False, "branches": [asdict(b) for b in branches]})
+            _print_json(args, {"changed": False, "branches": branches})
         else:
-            print(format_branches(branches))
+            _print_text(format_branches(branches))
         return EXIT_OK
     if args.json:
-        _print_json({"changed": True, "branch": asdict(info)})
+        _print_json(args, {"changed": True, "branch": info})
     elif args.branch_command == "name":
         logger.info("ブランチ(先端 %s)に名前 '%s' を付けました", _or_none(info.tip), args.name)
     else:
@@ -401,9 +674,14 @@ def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
 
 def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
-        result = repo.discard(rev=args.rev, force=args.force, allow_missing=args.allow_missing)
+        result = repo.discard(
+            rev=args.rev,
+            force=args.force,
+            allow_missing=args.allow_missing,
+            progress=args.progress,
+        )
     if args.json:
-        _print_json(result)
+        _print_json(args, result)
         return EXIT_OK
     for line in format_discard(result):
         logger.info("%s", line)
@@ -412,9 +690,9 @@ def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
 
 def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
-        result = repo.gc(dry_run=args.dry_run, no_git=args.no_git)
+        result = repo.gc(dry_run=args.dry_run, no_git=args.no_git, progress=args.progress)
     if args.json:
-        _print_json(result)
+        _print_json(args, result)
         return EXIT_OK
     logger.info("%s", format_gc(result))
     return EXIT_OK
@@ -423,10 +701,10 @@ def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
 def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
     # 異常が残っていれば終了コード 1(仕様書 3.10節)。
     with Repo.open(start) as repo:
-        result = repo.verify(quick=args.quick, repair=args.repair)
+        result = repo.verify(quick=args.quick, repair=args.repair, progress=args.progress)
     code = EXIT_OK if result.ok else EXIT_ERROR
     if args.json:
-        _print_json({**asdict(result), "ok": result.ok})
+        _print_json(args, result)
         return code
     lines = format_verify(result)
     for line in lines[:-1] if not result.ok else lines:
@@ -434,6 +712,21 @@ def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
     if not result.ok:
         logger.error("%s", lines[-1])
     return code
+
+
+_COMMANDS: Final[dict[str, Any]] = {
+    "init": _cmd_init,
+    "commit": _cmd_commit,
+    "log": _cmd_log,
+    "undo": _cmd_move,
+    "redo": _cmd_move,
+    "goto": _cmd_move,
+    "note": _cmd_note,
+    "branch": _cmd_branch,
+    "discard": _cmd_discard,
+    "gc": _cmd_gc,
+    "verify": _cmd_verify,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -636,33 +929,3 @@ def format_log(entries: list[LogEntry], state: WorkState | None) -> str:
         lines.append("未コミットの変更: " + ", ".join(changes))
     lines += _graph_lines(entries)
     return "\n".join(lines)
-
-
-def _entry_to_dict(e: LogEntry) -> dict:
-    c = e.commit
-    return {
-        "id": e.id,
-        "commit": None
-        if c is None
-        else {
-            "id": c.id,
-            "parent": c.parent,
-            "branch": c.branch,
-            "time": c.time,
-            "kind": c.kind,
-            "message": c.message,
-        },
-        "effective_parent": e.effective_parent,
-        "branch_label": e.branch_label,
-        "is_tip": e.is_tip,
-        "is_current": e.is_current,
-        "broken": e.broken,
-        "discarded": e.discarded,
-        "pinned": e.pinned,
-        "notes": [{"time": n.time, "text": n.text} for n in e.notes],
-    }
-
-
-def _print_json(result: Any) -> None:
-    data = asdict(result) if is_dataclass(result) else result
-    print(json.dumps(data, ensure_ascii=False, indent=2))

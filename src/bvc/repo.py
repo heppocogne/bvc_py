@@ -232,6 +232,7 @@ class Repo:
         chunker: dict | None = None,
         compression: str = "auto",
         git: bool = False,
+        progress: ProgressFn | None = None,
     ) -> Repo:
         # 新しいリポジトリを作り、その時点の追跡ファイルを版 0(kind=init)として記録する(M2-10)。
         if git:
@@ -281,7 +282,7 @@ class Repo:
             )
             repo = cls(workdir, config, lock)
             repo._history.load()
-            state = repo._worktree.state(base_tree={}, store_chunks=True)
+            state = repo._worktree.state(base_tree={}, store_chunks=True, progress=progress)
             if not state.tree:
                 logger.warning(
                     "追跡対象のファイルがありません(パターン: %s)",
@@ -476,7 +477,7 @@ class Repo:
         allow_missing: bool = False,
         renames: list[tuple[str, str]] | None = None,
         kind: str = "commit",
-        progress: Callable | None = None,
+        progress: ProgressFn | None = None,
     ) -> CommitResult:
         # 追跡ファイルの現状を新しい版として記録する(M2-10)。
         # 書き込み順: チャンク → マニフェスト → counters → 版 → HEAD → (bvc.lock: M6) → index → oplog(設計書 4.7節)。
@@ -488,6 +489,7 @@ class Repo:
             store_chunks=True,
             renames=renames,
             find_hints=not allow_missing,
+            progress=progress,
         )
 
         if state.missing and not allow_missing:
@@ -715,6 +717,7 @@ class Repo:
             store_chunks=True,
             no_cache=touched,
             find_hints=not allow_missing,
+            progress=progress,
         )
         if state.missing and not allow_missing:
             raise _missing_error(state)

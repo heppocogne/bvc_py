@@ -1,91 +1,102 @@
-# .pyz ファイルを生成し、バージョン情報をハードコード
-# Python 3.11+ を想定
+# 配布用の bvc.pyz(zipapp)と bvc.cmd を作る(実装計画書 M5-4、設計書 1.2節)。
+#
+# 使い方: python scripts/build_pyz.py [出力先の .pyz](省略時は dist/bvc.pyz)
+#
+# - pyproject.toml の version を bvc/__init__.py に書き込む(zipapp では importlib.metadata で取れないため)。
+# - 圧縮は deflate にする(ZIP_ZSTANDARD などは古い Python で読めない)。対象の Python 3.10 以降で動かす。
+# - このスクリプト自体も Python 3.10 で動く(tomllib が無ければ正規表現で version を読む)。
+# - 出力先と同じフォルダに bvc.cmd(Windows 用。python "%~dp0bvc.pyz" %*)を置く。
 
+from __future__ import annotations
+
+import re
 import shutil
 import sys
-import zipfile
+import zipapp
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Final
 
-import tomllib
+PROJECT_DIR: Final[Path] = Path(__file__).resolve().parent.parent
+SRC_PACKAGE: Final[Path] = PROJECT_DIR / "src" / "bvc"
+DEFAULT_OUTPUT: Final[Path] = PROJECT_DIR / "dist" / "bvc.pyz"
+# Linux/macOS で ./bvc.pyz として直接実行するときのインタプリタ
+INTERPRETER: Final[str] = "/usr/bin/env python3"
 
-
-def get_version_from_pyproject() -> str:
-    # pyproject.toml からバージョンを取得
-    pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
-    with open(pyproject_path, "rb") as f:
-        data = tomllib.load(f)
-    return data["project"]["version"]
-
-
-def create_init_with_hardcoded_version(version: str) -> str:
-    # バージョンをハードコードした __init__.py を生成
-    return f'''# bvc: バイナリファイル向けバージョン管理システム(試作)
+INIT_TEMPLATE: Final[str] = """\
+# bvc: バイナリファイル向けバージョン管理システム(試作)
+# build_pyz.py が生成したファイル(zipapp 用。バージョンを埋め込む)
 
 __version__ = "{version}"
 __all__ = ["__version__"]
-'''
+"""
+
+# zipapp の入口。zipapp.create_archive(main=...) が作るものは main() の戻り値を終了コードにしないため、自前で置く
+MAIN_TEMPLATE: Final[str] = """\
+import sys
+
+from bvc.main import main
+
+sys.exit(main())
+"""
+
+# 終了コードをそのまま返す(PowerShell の $LASTEXITCODE、cmd の %ERRORLEVEL%)
+CMD_TEMPLATE: Final[str] = """\
+@echo off
+python "%~dp0{pyz_name}" %*
+exit /b %ERRORLEVEL%
+"""
 
 
-def build_pyz(output_path: Path | str = "dist/bvc.pyz") -> None:
-    # .pyz ファイルを生成
-    #
-    # Args:
-    #     output_path: 生成先パス (デフォルト: dist/bvc.pyz)
+def read_version(pyproject: Path = PROJECT_DIR / "pyproject.toml") -> str:
+    # pyproject.toml の [project] の version を返す。
+    text = pyproject.read_text("utf-8")
+    try:
+        import tomllib  # 3.11 以降
+    except ImportError:
+        m = re.search(r'(?ms)^\[project\]\s*$.*?^version\s*=\s*"([^"]+)"', text)
+        if m is None:
+            raise ValueError(f"version が見つかりません: {pyproject}") from None
+        return m.group(1)
+    return tomllib.loads(text)["project"]["version"]
 
-    output_path = Path(output_path)
-    project_dir = Path(__file__).parent.parent
-    src_dir = project_dir / "src"
 
-    # バージョン取得
-    version = get_version_from_pyproject()
-    print(f"バージョン: {version}")
+def _ignore(directory: str, names: list[str]) -> list[str]:
+    return [n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))]
 
-    # 出力ディレクトリ作成
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"出力先: {output_path}")
 
-    with TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-
-        # src/bvc をコピー
-        bvc_dir = tmpdir / "bvc"
-        shutil.copytree(src_dir / "bvc", bvc_dir)
-
-        # バージョンをハードコード
-        init_path = bvc_dir / "__init__.py"
-        init_path.write_text(
-            create_init_with_hardcoded_version(version), encoding="utf-8"
+def build(output: Path = DEFAULT_OUTPUT) -> tuple[Path, Path]:
+    # .pyz と bvc.cmd を作り、それぞれのパスを返す。
+    output = Path(output).resolve()
+    version = read_version()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp) / "app"
+        shutil.copytree(SRC_PACKAGE, root / "bvc", ignore=_ignore)
+        (root / "bvc" / "__init__.py").write_text(
+            INIT_TEMPLATE.format(version=version), "utf-8", newline="\n"
         )
-        print(f"✓ {init_path.name} にバージョンをハードコード")
-
-        # __main__.py を生成（エントリポイント）
-        main_py = tmpdir / "__main__.py"
-        main_py.write_text(
-            "from bvc.main import main\nimport sys\nsys.exit(main())\n",
-            encoding="utf-8",
+        (root / "__main__.py").write_text(MAIN_TEMPLATE, "utf-8", newline="\n")
+        # 一時ファイルに作ってから置き換える(途中で失敗しても前の .pyz を壊さない)
+        tmp_pyz = Path(tmp) / output.name
+        zipapp.create_archive(
+            root, tmp_pyz, interpreter=INTERPRETER, compressed=True
         )
-        print("✓ __main__.py を生成")
+        shutil.move(str(tmp_pyz), str(output))
+    cmd = output.with_suffix(".cmd")
+    cmd.write_text(CMD_TEMPLATE.format(pyz_name=output.name), "utf-8", newline="\r\n")
+    return output, cmd
 
-        # .pyz を生成
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_ZSTANDARD) as zf:
-            # __main__.py
-            zf.write(main_py, "__main__.py")
 
-            # bvc パッケージ全体
-            for py_file in bvc_dir.rglob("*.py"):
-                arcname = py_file.relative_to(tmpdir)
-                zf.write(py_file, arcname)
-
-        print(f"✓ .pyz ファイル生成完了: {output_path}")
-        print(f"  実行方法: python {output_path} --version")
+def main(argv: list[str]) -> int:
+    if len(argv) > 1:
+        print("使い方: python scripts/build_pyz.py [出力先の .pyz]", file=sys.stderr)
+        return 2
+    pyz, cmd = build(Path(argv[0]) if argv else DEFAULT_OUTPUT)
+    print(f"バージョン {read_version()} の {pyz} と {cmd} を作成しました")
+    print(f"  実行方法: python {pyz} --version")
+    return 0
 
 
 if __name__ == "__main__":
-    if sys.version_info < (3, 11):
-        print("エラー: Python 3.11 以上が必要です", file=sys.stderr)
-        sys.exit(1)
-
-    output = "dist/bvc.pyz" if len(sys.argv) == 1 else sys.argv[1]
-    build_pyz(output)
-    print("\n✅ .pyz 生成完了！")
+    sys.exit(main(sys.argv[1:]))

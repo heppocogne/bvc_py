@@ -1,11 +1,24 @@
-# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-11)。観点: F-1, F-6, F-7, F-12, F-14, P-5, C-2, C-6。
+# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-11, M5-1〜M5-3)。観点: F-1, F-6, F-7, F-11, F-12, F-14, P-5, C-2, C-6。
 
+import dataclasses
 import io
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from bvc import cli
+from bvc.model import (
+    BranchInfo,
+    CommitResult,
+    DiscardResult,
+    GcReport,
+    MoveResult,
+    Note,
+    ProgressEvent,
+    VerifyReport,
+    WorkState,
+)
 from bvc.repo import Repo
 from tests import helpers
 
@@ -394,6 +407,349 @@ class TestCorruptionCommands(CliTestCase):
         data = json.loads(out)
         self.assertEqual((code, data["after"]["at"], data["skipped"]), (0, 2, [1]))
 
+
+
+# ---------------------------------------------------------------------------
+# M5: --json・終了コード・進捗・警告・文字コード
+# ---------------------------------------------------------------------------
+
+
+def _keys(cls) -> set[str]:
+    # --json の出力のキー: フィールド + 公開のプロパティ + warnings
+    return {f.name for f in dataclasses.fields(cls)} | set(cli._public_properties(cls)) | {"warnings"}
+
+
+class TestToJsonable(unittest.TestCase):
+    def test_dataclass_properties_and_containers(self):
+        s = WorkState(
+            tree={"a": "0" * 64},
+            modified=["a"],
+            added=[],
+            renamed=[("b", "c", 0.5)],
+            missing=[],
+            hints={},
+            total_bytes=1,
+            new_bytes=1,
+            fs_time_ns=5,
+        )
+        d = cli.to_jsonable(s)
+        self.assertIs(d["dirty"], True)
+        self.assertEqual(d["renamed"], [["b", "c", 0.5]])
+        self.assertEqual(json.loads(json.dumps(d)), d)
+        self.assertEqual(
+            cli.to_jsonable({1: Path("x/y"), "s": {"b", "a"}}),
+            {"1": str(Path("x/y")), "s": ["a", "b"]},
+        )
+        v = VerifyReport(
+            changed=False, quick=True, repair=False, checked_chunks=0, checked_manifests=0,
+            checked_commits=0, bad_chunks=[], bad_manifests=[], broken_commits=[3],
+            repaired_chunks=[], repaired_manifests=[],
+        )
+        self.assertIs(cli.to_jsonable(v)["ok"], False)
+
+
+class TestJsonAllCommands(CliTestCase):
+    # F-11: 全コマンドの --json が解析でき、dataclass の内容と一致する。changed と warnings を必ず含む。
+
+    def json_cmd(self, *args, code=0):
+        c, out, err = self.bvc("--json", *args)
+        self.assertEqual(c, code, out)
+        self.assertEqual(err, "")  # --json では stderr に何も出さない
+        data = json.loads(out)
+        self.assertIsInstance(data["changed"], bool)
+        self.assertIsInstance(data["warnings"], list)
+        return data
+
+    def test_f11_all_commands(self):
+        self.write("a.bin", b"v0")
+        data = self.json_cmd("init", "--track", "*.bin")
+        self.assertEqual(set(data), {"changed", "workdir", "commit", "warnings"})
+        self.assertEqual(data["workdir"], str(self.tmp))
+        with Repo.open(self.tmp) as repo:
+            self.assertEqual(data["commit"], cli.to_jsonable(repo.get_commit(0)))
+
+        self.write("a.bin", b"v1")
+        data = self.json_cmd("commit", "-m", "one")
+        self.assertEqual(set(data), _keys(CommitResult))
+        with Repo.open(self.tmp) as repo:
+            self.assertEqual(data["commit"], cli.to_jsonable(repo.get_commit(1)))
+        self.assertEqual(data["state"]["modified"], ["a.bin"])
+        self.assertIs(data["state"]["dirty"], True)
+
+        data = self.json_cmd("note", "-m", "メモ")
+        self.assertEqual(set(data["note"]), {f.name for f in dataclasses.fields(Note)})
+        self.assertEqual(
+            (data["changed"], data["note"]["commit_id"], data["note"]["text"]), (True, 1, "メモ")
+        )
+
+        data = self.json_cmd("undo")
+        self.assertEqual(set(data), _keys(MoveResult))
+        data = self.json_cmd("redo")
+        self.assertEqual((data["changed"], data["after"]["at"]), (True, 1))
+        data = self.json_cmd("goto", "0")
+        self.assertEqual((set(data), data["restored"]), (_keys(MoveResult), ["a.bin"]))
+        self.write("a.bin", b"v2")
+        self.json_cmd("commit", "-m", "two")
+
+        data = self.json_cmd("branch", "name", "本線", "1")
+        self.assertEqual(set(data["branch"]), {f.name for f in dataclasses.fields(BranchInfo)})
+        data = self.json_cmd("branch")
+        with Repo.open(self.tmp) as repo:
+            self.assertEqual(data["branches"], cli.to_jsonable(repo.branches()))
+        data = self.json_cmd("branch", "unname", "本線")
+        self.assertIsNone(data["branch"]["name"])
+
+        self.write("a.bin", b"dirty")
+        data = self.json_cmd("log", "--discarded")
+        self.assertEqual(set(data), {"changed", "uncommitted", "entries", "warnings"})
+        with Repo.open(self.tmp) as repo:
+            self.assertEqual(data["entries"], cli.to_jsonable(repo.log(include_discarded=True)))
+            expected = cli.to_jsonable(repo.work_state())
+        # 走査の時刻は呼ぶたびに変わる
+        for d in (data["uncommitted"], expected):
+            d.pop("fs_time_ns")
+        self.assertEqual(data["uncommitted"], expected)
+        self.json_cmd("commit")
+
+        data = self.json_cmd("discard", "1")
+        self.assertEqual((set(data), data["discarded"]), (_keys(DiscardResult), 1))
+        data = self.json_cmd("gc", "--dry-run")
+        self.assertEqual(
+            (set(data), data["changed"], data["deleted_commits"]), (_keys(GcReport), False, [1])
+        )
+        data = self.json_cmd("gc")
+        self.assertEqual((data["changed"], data["deleted_commits"]), (True, [1]))
+        data = self.json_cmd("verify")
+        self.assertEqual((set(data), data["ok"]), (_keys(VerifyReport), True))
+
+        data = self.json_cmd("--version")
+        self.assertEqual(set(data), {"changed", "version", "warnings"})
+
+    def test_m5_3_warnings_in_json(self):
+        # 警告は stderr ではなく warnings 配列に入る
+        data = self.json_cmd("init", "--track", "*.bin")
+        self.assertEqual(len(data["warnings"]), 1)
+        self.assertIn("追跡対象のファイルがありません", data["warnings"][0])
+
+    def test_m5_3_warnings_with_result(self):
+        self.write("a.bin")
+        self.bvc("init", "--track", "*.bin")
+        (self.tmp / ".bvc" / "branches.json").write_text("{", "utf-8")
+        self.write("a.bin", b"y")
+        data = self.json_cmd("commit")
+        self.assertIs(data["changed"], True)
+        self.assertTrue(any("branches.json" in w for w in data["warnings"]), data["warnings"])
+
+    def test_f11_error_json(self):
+        data = self.json_cmd("log", code=1)
+        self.assertEqual(set(data), {"changed", "error", "type", "exit_code", "details", "warnings"})
+        self.assertEqual((data["changed"], data["exit_code"]), (False, 1))
+        self.assertIn("リポジトリが見つかりません", data["error"])
+
+
+class TestExitCodesAllCommands(CliTestCase):
+    # F-12: 全コマンドの終了コード(仕様書 2.2節)。4 は TestMove・TestHistoryCommands などで確認している。
+
+    VALID = [
+        ("commit",),
+        ("log",),
+        ("undo",),
+        ("redo",),
+        ("goto", "0"),
+        ("note", "-m", "x"),
+        ("branch",),
+        ("branch", "name", "x"),
+        ("branch", "unname", "x"),
+        ("discard",),
+        ("gc",),
+        ("verify",),
+    ]
+    INVALID = [
+        (),
+        ("init",),
+        ("commit", "--bogus"),
+        ("log", "-n", "x"),
+        ("undo", "--bogus"),
+        ("redo", "--bogus"),
+        ("goto",),
+        ("note",),
+        ("branch", "name"),
+        ("branch", "bogus"),
+        ("discard", "1", "2"),
+        ("gc", "--bogus"),
+        ("verify", "--bogus"),
+        ("nosuchcommand",),
+    ]
+
+    def test_f12_usage_error_is_2(self):
+        for args in self.INVALID:
+            with self.subTest(args=args):
+                code, out, err = self.bvc(*args)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("usage:", err)
+                self.assertIn("エラー: ", err)
+                code, out, err = self.bvc("--json", *args)
+                self.assertEqual((code, err), (2, ""))
+                data = json.loads(out)
+                self.assertEqual(
+                    (data["type"], data["exit_code"], data["changed"]), ("UsageError", 2, False)
+                )
+
+    def test_f12_no_repo_is_1(self):
+        for args in self.VALID:
+            with self.subTest(args=args):
+                code, out, _ = self.bvc("--json", *args)
+                self.assertEqual(code, 1)
+                self.assertEqual(json.loads(out)["exit_code"], 1)
+        self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_f12_locked_is_3(self):
+        self.write("a.bin")
+        self.bvc("init", "--track", "*.bin")
+        lock = self.tmp / ".bvc" / "lock"
+        lock.write_text("{}", "utf-8")
+        for args in self.VALID:
+            with self.subTest(args=args):
+                code, out, _ = self.bvc("--json", *args)
+                self.assertEqual((code, json.loads(out)["type"]), (3, "Locked"))
+                code, _, err = self.bvc(*args)
+                self.assertEqual(code, 3)
+                self.assertIn("中止: 別の bvc", err)
+        code, _, _ = self.bvc("init", "--track", "*")
+        self.assertEqual(code, 1)
+        lock.unlink()
+        self.assertEqual(self.bvc("log")[0], 0)
+
+
+class _Tty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class TestProgress(CliTestCase):
+    # M5-2: 進捗は標準エラーが端末のときだけ表示する。
+
+    def run_tty(self, *args):
+        out, err = io.StringIO(), _Tty()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.run(["-C", str(self.tmp), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_progress_on_tty(self):
+        self.write("a.bin", b"x" * 100_000)
+        code, out, err = self.run_tty("init", "--track", "*.bin")
+        self.assertEqual(code, 0)
+        self.assertIn("\r保存 a.bin: ", err)
+        self.assertIn("(100%)", err)
+        # 最後に進捗の行を消す
+        self.assertRegex(err, r"\r +\r$")
+        self.assertIn("リポジトリを作成しました", out)
+        self.assertNotIn("\r", out)
+
+    def test_progress_moves_and_verify(self):
+        self.write("a.bin", b"1" * 1000)
+        self.bvc("init", "--track", "*.bin")
+        self.write("a.bin", b"2" * 1000)
+        self.bvc("commit")
+        _, _, err = self.run_tty("undo")
+        self.assertIn("置き換え a.bin: 1/1 (100%)", err)
+        _, _, err = self.run_tty("verify")
+        self.assertIn("チャンクの検査", err)
+
+    def test_no_progress_when_quiet_or_json_or_not_tty(self):
+        self.write("a.bin", b"x" * 1000)
+        code, _, err = self.run_tty("-q", "init", "--track", "*.bin")
+        self.assertEqual((code, err), (0, ""))
+        self.write("a.bin", b"y" * 1000)
+        code, out, err = self.run_tty("--json", "commit")
+        self.assertEqual((code, err), (0, ""))
+        json.loads(out)
+        self.write("a.bin", b"z" * 1000)
+        code, _, err = self.bvc("commit")
+        self.assertEqual((code, err), (0, ""))
+
+    def test_message_clears_progress_line(self):
+        err = _Tty()
+        view = cli.ProgressView(err, interval=0)
+        view(ProgressEvent("put", 10, 100, "a.bin"))
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            cli.setup_logging(progress=view)
+            try:
+                cli.logger.warning("注意")
+            finally:
+                cli.setup_logging()
+        line = "保存 a.bin: 10 B / 100 B (10%)"
+        self.assertEqual(err.getvalue(), f"\r{line}\r{' ' * cli._width(line)}\r警告: 注意\n")
+
+
+class TestProgressView(unittest.TestCase):
+    def test_format(self):
+        self.assertEqual(
+            cli.format_progress(ProgressEvent("put", 1024, 2048, "a")), "保存 a: 1.0 KiB / 2.0 KiB (50%)"
+        )
+        self.assertEqual(cli.format_progress(ProgressEvent("gc", 3, 4)), "削除: 3/4 (75%)")
+        self.assertEqual(cli.format_progress(ProgressEvent("new_stage", 3)), "new_stage: 3")
+        self.assertEqual(cli.format_progress(ProgressEvent("restore", 0, 0)), "置き換え: 0/0")
+
+    def test_throttle_and_clear(self):
+        s = _Tty()
+        view = cli.ProgressView(s, interval=3600)
+        view(ProgressEvent("put", 1, 10, "a"))
+        view(ProgressEvent("put", 2, 10, "a"))  # 間隔内の同じファイルは表示しない
+        view(ProgressEvent("put", 1, 10, "b"))  # ファイルが変わったら表示する
+        self.assertEqual(s.getvalue().count("\r"), 2)
+        self.assertNotIn("2 B", s.getvalue())
+        view.clear()
+        view.clear()  # 2回目は何もしない
+        self.assertEqual(s.getvalue().count("\r"), 4)
+
+    def test_long_line_is_truncated(self):
+        line = cli._truncate("保存 " + "長" * 100 + ": 1 B", 20)
+        self.assertLessEqual(cli._width(line), 20)
+        self.assertTrue(line.startswith("…") and line.endswith(": 1 B"))
+
+
+class TestEncoding(CliTestCase):
+    # M4-C の残課題: stdout が cp932 のパイプでも表示できる。表せない文字は置き換え、JSON は ASCII で書く。
+
+    def run_cp932(self, *args):
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="cp932", errors="strict", newline="\n")
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.run(["-C", str(self.tmp), *args])
+        out.flush()
+        return code, raw.getvalue().decode("cp932"), err.getvalue()
+
+    def test_log_on_cp932(self):
+        self.write("a.bin", b"1")
+        self.bvc("init", "--track", "*.bin")
+        self.write("a.bin", b"2")
+        self.bvc("commit")
+        self.bvc("undo")
+        self.write("a.bin", b"3")
+        self.bvc("commit")
+        name = "é\U0001f600.bin"  # cp932 で表せない名前
+        self.write(name, b"4")
+        code, out, err = self.run_cp932("log")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("├─┘", out)
+        self.assertIn("??.bin (added)", out)
+        code, out, err = self.run_cp932("--json", "log")
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(out.isascii())
+        self.assertEqual(json.loads(out)["uncommitted"]["added"], [name])
+
+    def test_symbol_fallback(self):
+        class Ascii:
+            encoding = "ascii"
+
+        class Sjis:
+            encoding = "cp932"
+
+        self.assertEqual(cli._fallback("✗ ╯ ├─┼│ ○ →", Ascii()), "x / |-+| o ->")
+        self.assertEqual(cli._fallback("✗╯├", Sjis()), "×┘├")
+        self.assertEqual(cli._fallback("✗", io.StringIO()), "✗")
 
 if __name__ == "__main__":
     unittest.main()

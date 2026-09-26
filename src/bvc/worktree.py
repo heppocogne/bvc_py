@@ -194,8 +194,10 @@ class Worktree:
         no_cache: Collection[str] = (),
         renames: Collection[tuple[str, str]] = (),
         find_hints: bool = True,
+        progress: ProgressFn | None = None,
     ) -> WorkState:
         # 作業フォルダの状態を base_tree と比べる。store_chunks なら変わったファイルを保存する。
+        # progress は保存するファイルの進捗(ProgressEvent("put", ...))の通知先。
         # renames は名前変更の手動指定(正規化済みの相対パスの組)。当てはまらなければ UsageError。
         # find_hints なら、missing についてパターン外の同じ内容のファイルを探す(読み込みを伴う)。
         fs_time_ns = self._mark_fs_time()
@@ -236,7 +238,7 @@ class Worktree:
                 total_bytes += st.st_size
                 continue
 
-            sha, put, st2 = self._hash_file(full, rel, store_chunks)
+            sha, put, st2 = self._hash_file(full, rel, store_chunks, progress)
             tree[rel] = sha
             stats[rel] = (st2.st_size, st2.st_mtime_ns)
             total_bytes += st2.st_size
@@ -267,7 +269,7 @@ class Worktree:
         )
 
     def _hash_file(
-        self, full: Path, rel: str, store_chunks: bool
+        self, full: Path, rel: str, store_chunks: bool, progress: ProgressFn | None = None
     ) -> tuple[str, PutStats, os.stat_result]:
         # stat₁ → 読み込み(分割・ハッシュ・保存)→ stat₂。stat が変わっていれば読み直す。
         chunker, compression = self._rule_for(rel)
@@ -292,6 +294,7 @@ class Worktree:
                             f,
                             chunker,
                             self.config.commit_verify,
+                            progress=progress,
                             path=rel,
                             compression=compression,
                         )

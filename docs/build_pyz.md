@@ -1,97 +1,55 @@
-# .pyz ファイル生成ガイド
+# bvc.pyz の作り方
 
 ## 概要
 
-`scripts/build_pyz.py` は、スタンドアロンの Python Zip Archive (`.pyz`) ファイルを生成します。
-`pyproject.toml` からバージョンを自動抽出してハードコードするため、追加の依存管理が不要です。
+`scripts/build_pyz.py` は、配布用の1ファイル `bvc.pyz`(Python の zipapp)と、Windows 向けの `bvc.cmd` を作る(実装計画書 M5-4、設計書 1.2節)。
+`pyproject.toml` の `version` を `bvc/__init__.py` に埋め込むので、実行時に追加のファイルは要らない。
 
 ## 必要な環境
 
-- **Python 3.11 以上** (build スクリプトが `tomllib` を使用)
+- ビルド: Python 3.10 以上(3.11 以上なら `tomllib`、3.10 では正規表現で `version` を読む)
+- 実行: Python 3.10 以上(標準ライブラリだけで動く)
 
-## 使用方法
+## 使い方
 
-### デフォルト出力先 (`dist/bvc.pyz`)
-
-```bash
-python scripts/build_pyz.py
+```
+python scripts/build_pyz.py                       dist/bvc.pyz と dist/bvc.cmd を作る
+python scripts/build_pyz.py path/to/bvc.pyz       出力先を指定する(bvc.cmd も同じフォルダに作る)
 ```
 
-### カスタム出力先
+## 実行
 
-```bash
-python scripts/build_pyz.py path/to/output.pyz
 ```
-
-## 生成される .pyz の実行
-
-```bash
-# バージョン表示
 python dist/bvc.pyz --version
-
-# ヘルプ表示
-python dist/bvc.pyz --help
-
-# コマンド実行
-python dist/bvc.pyz init
+python dist/bvc.pyz init --track "*.bin"
 python dist/bvc.pyz commit -m "メッセージ"
 python dist/bvc.pyz log
 ```
 
-## .pyz ファイルの配布
+Windows では、`bvc.pyz` と `bvc.cmd` を同じフォルダに置き、そのフォルダを PATH に加えると `bvc <コマンド>` で実行できる。
+`bvc.cmd` の中身は次の3行で、終了コードはそのまま返る(PowerShell の `$LASTEXITCODE`、cmd の `%ERRORLEVEL%`)。
 
-生成された `.pyz` ファイルは：
-- ✅ スタンドアロンで実行可能（他の依存不要）
-- ✅ `pip install` の必要がない
-- ✅ バージョン情報が組み込まれている
-- ✅ 複数の OS で実行可能
+```
+@echo off
+python "%~dp0bvc.pyz" %*
+exit /b %ERRORLEVEL%
+```
 
-## バージョン更新時の手順
-
-1. `pyproject.toml` の `version` を更新
-2. `python scripts/build_pyz.py` を実行
-3. 新しい `.pyz` ファイルが生成される（バージョンは自動的に更新）
+Linux/macOS では、`chmod +x bvc.pyz` の後に `./bvc.pyz <コマンド>` でも実行できる(先頭行が `#!/usr/bin/env python3`)。
 
 ## 仕組み
 
-```
-┌─────────────────────────────────┐
-│ pyproject.toml                  │
-│   version = "0.1.0"             │
-└────────────┬────────────────────┘
-             │ (tomllib で読込)
-             ▼
-┌─────────────────────────────────┐
-│ build_pyz.py                    │
-│  ├─ バージョン抽出              │
-│  ├─ __init__.py にハードコード  │
-│  └─ .pyz 生成                   │
-└────────────┬────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────┐
-│ dist/bvc.pyz                    │
-│  └─ bvc/__init__.py             │
-│      __version__ = "0.1.0" ◄─── │ ハードコード
-└─────────────────────────────────┘
-```
+1. `src/bvc/` を一時フォルダに複製する(`__pycache__` と `.pyc` は除く)。
+2. `bvc/__init__.py` を、`__version__ = "<pyproject.toml の version>"` だけのものに置き換える。
+3. アーカイブ直下に `__main__.py`(`sys.exit(main())`)を置く。`zipapp` の `main=` 指定で作る入口は戻り値を終了コードにしないため、使わない。
+4. `zipapp.create_archive(compressed=True)` で deflate 圧縮の `.pyz` を作り、出力先へ移す。zstd などの新しい圧縮方式は、古い Python で読めないため使わない。
+5. 同じフォルダに `bvc.cmd`(改行は CRLF)を書く。
 
-## トラブルシューティング
+## バージョンを上げるとき
 
-### Python 3.10 以前で実行
+1. `pyproject.toml` の `version` を更新する。
+2. `python scripts/build_pyz.py` を実行する。
 
-```
-エラー: Python 3.11 以上が必要です
-```
+## 確認
 
-**解決方法**: Python 3.11 以上でビルドしてください。
-
-### `pyproject.toml` が見つからない
-
-ビルドスクリプトは `scripts/build_pyz.py` から相対的に `pyproject.toml` を探しています。
-プロジェクトルートから実行してください。
-
-```bash
-cd /path/to/bvc-py
-python scripts/build_pyz.py
-```
+`tests/integration/test_pyz.py` が、一時フォルダに作った `bvc.pyz` で基本シナリオと終了コードを確かめる(Windows では `bvc.cmd` も)。
