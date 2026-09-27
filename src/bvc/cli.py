@@ -581,7 +581,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.json:
             traceback.print_exc(file=sys.stderr)
         else:
-            logger.exception("予期しないエラー: %s", e)  # noqa: TRY401
+            logger.exception(f"予期しないエラー: {e}")  # noqa: TRY401
         return _report_error(args, e, EXIT_ERROR, f"予期しないエラー: {e}", logged=True)
     finally:
         if view is not None:
@@ -614,7 +614,7 @@ def _report_error(
     if usage:
         sys.stderr.write(usage)
     prefix = "中止" if isinstance(e, SafetyAbort) else None
-    logger.error("%s", message or e, extra={"prefix": prefix})
+    logger.error(f"{message or e}", extra={"prefix": prefix})
     return exit_code
 
 
@@ -639,8 +639,7 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
                 hooks = repo.install_hooks()
             except BvcError as e:
                 logger.warning(
-                    "gitのフックを設置できませんでした: %s(bvc git install-hooksで設置できます)",
-                    e,
+                    f"gitのフックを設置できませんでした: {e}(bvc git install-hooksで設置できます)"
                 )
     commit = entry.commit
     if args.json:
@@ -654,23 +653,20 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
             },
         )
         return EXIT_OK
+    tracked = len(commit.tree) if commit is not None else 0
     logger.info(
-        "リポジトリを作成しました: %s(版%d、追跡ファイル%d件)",
-        repo.workdir,
-        entry.id,
-        len(commit.tree) if commit is not None else 0,
+        f"リポジトリを作成しました: {repo.workdir}(版{entry.id}、追跡ファイル{tracked}件)"
     )
     if args.git:
         lock_file = repo.config.git.lock_file
         logger.info(
-            "git連携を有効にしました。%sをgit addしてコミットしてください",
-            lock_file,
+            f"git連携を有効にしました。{lock_file}をgit addしてコミットしてください"
         )
         if hooks is not None:
             _log_hooks(hooks)
         logger.info(".gitignoreに以下のファイルを追加して下さい:")
         for line in [f"/{BVC_DIR}/", *args.track]:
-            logger.info("  %s", line)
+            logger.info(f"  {line}")
     return EXIT_OK
 
 
@@ -700,15 +696,13 @@ def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
         logger.info("変更がありません")
         return EXIT_OK
     s = result.state
+    new_branch = "(新しいブランチを作成)" if result.new_branch else ""
     logger.info(
-        "版%dを作成しました%s(新規データ %s/%s)",
-        result.commit.id,
-        "(新しいブランチを作成)" if result.new_branch else "",
-        format_size(s.new_bytes),
-        format_size(s.total_bytes),
+        f"版{result.commit.id}を作成しました{new_branch}"
+        f"(新規データ {format_size(s.new_bytes)}/{format_size(s.total_bytes)})"
     )
     for line in _change_lines(s, deleted_label="deleted"):
-        logger.info("  %s", line)
+        logger.info(f"  {line}")
     return EXIT_OK
 
 
@@ -718,7 +712,7 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
         try:
             state: WorkState | None = repo.work_state()
         except BvcError as e:
-            logger.warning("未コミットの変更を確認できません: %s", e)
+            logger.warning(f"未コミットの変更を確認できません: {e}")
             state = None
     if args.json:
         _print_json(
@@ -759,7 +753,7 @@ def _cmd_move(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, result)
         return EXIT_OK
     for line in format_move(result):
-        logger.info("%s", line)
+        logger.info(line)
     return EXIT_OK
 
 
@@ -771,7 +765,7 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, {"changed": True, "note": note})
     else:
         logger.info(
-            "版%d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit)
+            f"版{note.commit_id}({_commit_label(commit)})にコメントを追加しました"
         )
     return EXIT_OK
 
@@ -794,11 +788,11 @@ def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, {"changed": True, "branch": info})
     elif args.branch_command == "name":
         logger.info(
-            "ブランチ(先端 %s)に名前'%s'を付けました", _or_none(info.tip), args.name
+            f"ブランチ(先端 {_or_none(info.tip)})に名前'{args.name}'を付けました"
         )
     else:
         logger.info(
-            "ブランチ(先端%s)から名前'%s'を外しました", _or_none(info.tip), args.name
+            f"ブランチ(先端{_or_none(info.tip)})から名前'{args.name}'を外しました"
         )
     return EXIT_OK
 
@@ -815,7 +809,7 @@ def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, result)
         return EXIT_OK
     for line in format_discard(result):
-        logger.info("%s", line)
+        logger.info(line)
     return EXIT_OK
 
 
@@ -827,7 +821,7 @@ def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
     if args.json:
         _print_json(args, result)
         return EXIT_OK
-    logger.info("%s", format_gc(result))
+    logger.info(format_gc(result))
     return EXIT_OK
 
 
@@ -843,9 +837,9 @@ def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
         return code
     lines = format_verify(result)
     for line in lines[:-1] if not result.ok else lines:
-        logger.info("%s", line)
+        logger.info(line)
     if not result.ok:
-        logger.error("%s", lines[-1])
+        logger.error(lines[-1])
     return code
 
 
@@ -861,7 +855,7 @@ def _cmd_sync(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, result)
         return EXIT_OK
     for line in format_sync(result):
-        logger.info("%s", line)
+        logger.info(line)
     return EXIT_OK
 
 
@@ -883,13 +877,11 @@ def _cmd_git(args: argparse.Namespace, start: Path) -> int:
         _log_hooks(result)
     elif cmd == "pin" and result.changed:
         logger.info(
-            "gitのコミット%sを版%dに対応付けました",
-            result.pin.git[:12],
-            result.pin.bvc,
+            f"gitのコミット{result.pin.git[:12]}を版{result.pin.bvc}に対応付けました"
         )
     elif cmd == "pre-commit" and result.auto_commit is not None:
         logger.info(
-            "bvc: 未コミットの変更を版%dに自動コミットしました", result.auto_commit.id
+            f"bvc: 未コミットの変更を版{result.auto_commit.id}に自動コミットしました"
         )
     return EXIT_OK
 
@@ -906,11 +898,8 @@ def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
             raise
         bar = "=" * 60
         logger.error(
-            "%s\n%s\nbvc syncに失敗しました。gitの作業ツリー(コード)とバイナリが食い違っています"
-            "(非同期状態)。\n原因を解消してからbvc syncを実行してください。\n%s",
-            e,
-            bar,
-            bar,
+            f"{e}\n{bar}\nbvc syncに失敗しました。gitの作業ツリー(コード)とバイナリが食い違っています"
+            f"(非同期状態)。\n原因を解消してからbvc syncを実行してください。\n{bar}",
             extra={"prefix": "中止" if isinstance(e, SafetyAbort) else None},
         )
         return e.exit_code
@@ -919,22 +908,20 @@ def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
         return EXIT_OK
     if result.sync is not None:
         for line in format_sync(result.sync):
-            logger.info("bvc: %s", line)
+            logger.info(f"bvc: {line}")
     return EXIT_OK
 
 
 def _log_hooks(r: HooksResult) -> None:
     if r.installed:
         logger.info(
-            "gitのフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir
+            f"gitのフックを設置しました: {', '.join(r.installed)}({r.hooks_dir})"
         )
     if r.already:
-        logger.info("設置済みのフック: %s", ", ".join(r.already))
+        logger.info(f"設置済みのフック: {', '.join(r.already)}")
     for name, line in r.manual.items():
         logger.warning(
-            "既存のフック%sがあるため設置していません。下記の処理を追加して下さい:\n  %s",
-            Path(r.hooks_dir) / name,
-            line,
+            f"既存のフック{Path(r.hooks_dir) / name}があるため設置していません。下記の処理を追加して下さい:\n  {line}"
         )
 
 

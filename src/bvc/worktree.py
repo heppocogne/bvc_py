@@ -155,7 +155,7 @@ class Worktree:
                     continue
                 if is_link_or_reparse(st):
                     if self._matches_quietly(raw):
-                        logger.warning("リンクは追跡しません: %s", raw)
+                        logger.warning(f"リンクは追跡しません: {raw}")
                     continue
                 if stat.S_ISDIR(st.st_mode):
                     stack.append(raw)
@@ -166,7 +166,7 @@ class Worktree:
                     rel = check_relpath(raw)
                 except UnsafePath:
                     if self._matches_quietly(raw):
-                        logger.warning("記録できない名前のため追跡しません: %s", raw)
+                        logger.warning(f"記録できない名前のため追跡しません: {raw}")
                     continue
                 if not self.is_tracked(rel):
                     continue
@@ -338,7 +338,7 @@ class Worktree:
             ) and put.size == st2.st_size:
                 return sha, put, st2
             if attempt + 1 < RETRY_ATTEMPTS:
-                logger.info("書き込み中のため読み直します: %s", rel)
+                logger.info(f"書き込み中のため読み直します: {rel}")
                 time.sleep(RETRY_WAIT)
         raise FileChanging(
             f"ファイルが書き込み中です(読み取りの中に変更されました): {rel}", path=rel
@@ -391,7 +391,7 @@ class Worktree:
         except FileNotFoundError:
             return {}, 0
         except CorruptData as e:
-            logger.warning("%s(作り直します)", e)
+            logger.warning(f"{e}(作り直します)")
             return {}, 0
 
     def _read_index(self) -> tuple[dict[str, dict], int]:
@@ -871,9 +871,7 @@ class Worktree:
             self._stats = {}
             self._names = {}
             self._complete(journal, ops, on_committed, has_journal=True)
-            logger.warning(
-                "中断していた復元を完了しました(版%d)", journal["head"]["at"]
-            )
+            logger.warning(f"中断していた復元を完了しました(版{journal['head']['at']})")
 
     def _plan(
         self, target_tree: dict[str, str], current: WorkState, tracked: dict[str, str]
@@ -1115,8 +1113,7 @@ class Worktree:
         self._discard_dir(self._txn / "new")
         if self._list_dir(self._txn / "old"):
             logger.warning(
-                "作業域に前回の復元の残骸があります。%sを確認してください",
-                self._txn / "old",
+                f"作業域に前回の復元の残骸があります。{self._txn / 'old'}を確認してください"
             )
 
     def _list_dir(self, d: Path) -> list[str]:

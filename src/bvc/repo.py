@@ -383,8 +383,7 @@ class Repo:
             )
             if not state.tree:
                 logger.warning(
-                    "追跡対象のファイルがありません(パターン: %s)",
-                    ", ".join(config.track),
+                    f"追跡対象のファイルがありません(パターン: {', '.join(config.track)})"
                 )
             commit = repo._history.new_commit(
                 parent=None,
@@ -453,7 +452,7 @@ class Repo:
         recovered: list[dict] = []
 
         def note(file: str, problem: str, action: str) -> None:
-            logger.warning("%sを自動で復旧しました: %s(%s)", file, action, problem)
+            logger.warning(f"{file}を自動で復旧しました: {action}({problem})")
             recovered.append({"file": file, "problem": problem, "action": action})
 
         # branches.json は load の中で読むので、先に直しておく
@@ -534,9 +533,8 @@ class Repo:
                 return Head(c.id, c.branch), "作業ファイルと内容が一致する版"
         c = living[0]
         logger.warning(
-            "作業ファイルと内容が一致する版が見つからないため、最新の版%dを現在位置にしました。"
-            "作業ファイルは変えていません(未コミットの変更として扱われます)",
-            c.id,
+            f"作業ファイルと内容が一致する版が見つからないため、最新の版{c.id}を現在位置にしました。"
+            "作業ファイルは変えていません(未コミットの変更として扱われます)"
         )
         return Head(c.id, c.branch), "最新の版"
 
@@ -1053,9 +1051,7 @@ class Repo:
         if previous is not None:
             tip = h.branch_tip(previous)
             logger.info(
-                "名前'%s'を別のブランチ(先端%s)から付け替えました",
-                name,
-                "なし" if tip is None else tip,
+                f"名前'{name}'を別のブランチ(先端{'なし' if tip is None else tip})から付け替えました"
             )
         h.log_op(
             _op_entry(
@@ -1180,16 +1176,14 @@ class Repo:
         if unknown:
             skipped = ["manifests", "chunks"]
             logger.warning(
-                "版%sは読み込めない(または不正な記録を含む)ため、参照するデータが分かりません。"
-                "安全のため、マニフェストとチャンクは削除しません(その版をdiscardすると削除できます)",
-                ", ".join(map(str, sorted(unknown))),
+                f"版{', '.join(map(str, sorted(unknown)))}は読み込めない(または不正な記録を含む)ため、参照するデータが分かりません。"
+                "安全のため、マニフェストとチャンクは削除しません(その版をdiscardすると削除できます)"
             )
         elif unreadable:
             skipped = ["chunks"]
             logger.warning(
-                "有効な版が参照するマニフェスト%d件を読めないため、参照するチャンクが分かりません。"
-                "安全のため、チャンクは削除しません",
-                len(unreadable),
+                f"有効な版が参照するマニフェスト{len(unreadable)}件を読めないため、参照するチャンクが分かりません。"
+                "安全のため、チャンクは削除しません"
             )
 
         # 削除の対象
@@ -1266,9 +1260,7 @@ class Repo:
                 try:
                     fsutil.remove_quietly(p)
                 except OSError as e:
-                    logger.warning(
-                        "一時ファイルを削除できませんでした(%s): %s", e, p.name
-                    )
+                    logger.warning(f"一時ファイルを削除できませんでした({e}): {p.name}")
                 step()
         finally:
             # 版ファイルを消したので、履歴を読み直す
@@ -1448,7 +1440,7 @@ class Repo:
                         if not want_chunks and not want_manifests:
                             break
             except OSError as e:
-                logger.warning("修復の材料にできませんでした(%s): %s", e, rel)
+                logger.warning(f"修復の材料にできませんでした({e}): {rel}")
             if progress is not None:
                 progress(ProgressEvent("repair", i, len(files), rel))
         return done_chunks, done_manifests
@@ -1523,10 +1515,8 @@ class Repo:
             if lh != v.th:
                 if v.raw is not None and (lh is None or lh != v.saved):
                     logger.warning(
-                        "%sがbvcの記録と一致しない状態(非同期状態)でしたが、版%dの内容で上書きします"
-                        "(元の内容は操作ログに記録しました)",
-                        lock_file,
-                        head.at,
+                        f"{lock_file}がbvcの記録と一致しない状態(非同期状態)でしたが、版{head.at}の内容で上書きします"
+                        "(元の内容は操作ログに記録しました)"
                     )
                     self._history.log_op(
                         {
@@ -1550,9 +1540,7 @@ class Repo:
             self.lock_status = "ok"
         except (OSError, CorruptData, UnsafePath) as e:
             logger.warning(
-                "%sを更新できませんでした(%s)。次にbvcを実行したときに更新します",
-                lock_file,
-                e,
+                f"{lock_file}を更新できませんでした({e})。次にbvcを実行したときに更新します"
             )
 
     def _check_lock(self, warn: bool = True) -> None:
@@ -1586,10 +1574,8 @@ class Repo:
             else f"現在位置の版{head.at}と内容が一致しません"
         )
         logger.warning(
-            "%s が%s(非同期状態)。gitの作業ツリーとバイナリが食い違っている可能性があります。"
-            "bvc syncで合わせてください",
-            self.config.git.lock_file,
-            reason,
+            f"{self.config.git.lock_file} が{reason}(非同期状態)。gitの作業ツリーとバイナリが食い違っている可能性があります。"
+            "bvc syncで合わせてください"
         )
 
     def _find_by_tree(
@@ -1646,7 +1632,7 @@ class Repo:
             msg = f"{what}がありません(bvc.lockの無いコミットです)。作業ファイルはそのままです"
             if require_lock:
                 raise BvcError(msg)
-            logger.warning("%s", msg)
+            logger.warning(msg)
             return SyncResult(changed=False, before=head, after=head, lock_found=False)
         tree = lock.tree
         hint = lock.bvc_commit
@@ -1654,9 +1640,7 @@ class Repo:
             h.exists(hint) and h.tree_known(hint) and h.get(hint).tree == tree
         ):
             logger.warning(
-                "%sのbvc_commit(版%d)と内容が一致しません(別のリポジトリで作られたbvc.lockなど)。内容を基準にします",
-                what,
-                hint,
+                f"{what}のbvc_commit(版{hint})と内容が一致しません(別のリポジトリで作られたbvc.lockなど)。内容を基準にします"
             )
         if h.tree_known(head.at) and h.get(head.at).tree == tree:
             self._update_lock(head)  # 同じ内容なので書き換えず、lockstate だけ合わせる
@@ -1700,18 +1684,17 @@ class Repo:
         )
         if data is None:
             logger.info(
-                "gitのコミットに%sが無いため、記録しません",
-                self.config.git.lock_file,
+                f"gitのコミットに{self.config.git.lock_file}が無いため、記録しません"
             )
             return PinResult(changed=False)
         try:
             lock = gitlink.parse_lock(data, what)
         except (IntegrityError, UnsupportedFormat) as e:
-            logger.warning("%sを読み込めないため、記録しません: %s", what, e)
+            logger.warning(f"{what}を読み込めないため、記録しません: {e}")
             return PinResult(changed=False)
         cid = self._find_by_tree(lock.tree, lock.bvc_commit, include_discarded=True)
         if cid is None:
-            logger.warning("%sと内容が一致する健全な版が無いため、記録しません", what)
+            logger.warning(f"{what}と内容が一致する健全な版が無いため、記録しません")
             return PinResult(changed=False)
         existing = next((p for p in h.pins() if p.git == sha and p.bvc == cid), None)
         if existing is not None:
@@ -1749,9 +1732,7 @@ class Repo:
         if staged is None:
             if raw is not None and not staged_blobs:
                 logger.warning(
-                    "%sがgitにステージされていません(git add %s)",
-                    cfg.lock_file,
-                    cfg.lock_file,
+                    f"{cfg.lock_file}がgitにステージされていません(git add {cfg.lock_file})"
                 )
             return result
         what = cfg.lock_file
@@ -1770,9 +1751,7 @@ class Repo:
         result.staged_ok = True
         if work is None or work.tree != lock.tree:
             logger.warning(
-                "作業ツリーの%sの変更がステージされていません(git add %s)",
-                cfg.lock_file,
-                cfg.lock_file,
+                f"作業ツリーの{cfg.lock_file}の変更がステージされていません(git add {cfg.lock_file})"
             )
         return result
 
@@ -1785,8 +1764,7 @@ class Repo:
         lock, err, raw = self._read_work_lock()
         if raw is None:
             logger.info(
-                "%sが無いコミットです。作業ファイルはそのままです",
-                self.config.git.lock_file,
+                f"{self.config.git.lock_file}が無いコミットです。作業ファイルはそのままです"
             )
             return PostCheckoutResult(changed=False)
         h = self._history

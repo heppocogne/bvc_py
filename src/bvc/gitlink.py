@@ -141,9 +141,7 @@ def read_lockstate(bvc_dir: Path) -> tuple[bool, str | None]:
         return False, None
     except (CorruptData, UnsafePath) as e:
         logger.warning(
-            "%s を読み込めません(%s)。次に bvc.lock を書くときに作り直します",
-            LOCKSTATE,
-            e,
+            f"{LOCKSTATE} を読み込めません({e})。次に bvc.lock を書くときに作り直します"
         )
         return True, None
 

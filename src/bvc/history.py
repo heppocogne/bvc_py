@@ -170,7 +170,7 @@ class History:
                 file_id = check_id_str(name[: -len(".json")])
             except UnsafePath:
                 logger.warning(
-                    "commits/%s: 版ファイルの名前ではないため無視しました", name
+                    f"commits/{name}: 版ファイルの名前ではないため無視しました"
                 )
                 continue
             try:
@@ -178,14 +178,13 @@ class History:
                 commit, bad_tree = _parse_commit(data, file_id)
             except CorruptData as e:
                 # UnsupportedFormat と OSError(使用中など)はそのまま送出する(D-15)
-                logger.warning("%s(読み込み不可として扱います)", e)
+                logger.warning(f"{e}(読み込み不可として扱います)")
                 self._commits[file_id] = None
                 continue
             self._commits[file_id] = commit
             if bad_tree:
                 logger.warning(
-                    "版%d: 不正なパスまたはハッシュを含みます(壊れた版として扱います)",
-                    file_id,
+                    f"版{file_id}: 不正なパスまたはハッシュを含みます(壊れた版として扱います)"
                 )
                 self._broken.add(file_id)
 
@@ -193,13 +192,13 @@ class History:
             self._bvc_dir / "discarded.jsonl", "discarded.jsonl"
         )
         for w in warns:
-            logger.warning("%s", w)
+            logger.warning(w)
         for r in records:
             try:
                 self._discarded.add(check_id(r.get("id")))
             except UnsafePath:
                 logger.warning(
-                    "discarded.jsonl: 不正な番号を読み飛ばしました: %r", r.get("id")
+                    f"discarded.jsonl: 不正な番号を読み飛ばしました: {r.get('id')!r}"
                 )
 
         try:
@@ -210,19 +209,19 @@ class History:
         except FileNotFoundError:
             names_obj = {}
         except CorruptData as e:
-            logger.warning("%s(ブランチ名を読み込めません)", e)
+            logger.warning(f"{e}(ブランチ名を読み込めません)")
             names_obj = {}
         for bid_str, name in names_obj.items():
             try:
                 self._branches[check_id_str(bid_str)] = check_branch_name(name)
             except (UnsafePath, RevisionError):
                 logger.warning(
-                    "branches.json: 不正な項目を読み飛ばしました: %r", bid_str
+                    f"branches.json: 不正な項目を読み飛ばしました: {bid_str!r}"
                 )
 
         self._pins, warns = read_jsonl(self._bvc_dir / "pins.jsonl", "pins.jsonl")
         for w in warns:
-            logger.warning("%s", w)
+            logger.warning(w)
 
         self._rebuild()
 
@@ -351,14 +350,14 @@ class History:
         what = f"notes/{commit_id}.jsonl"
         records, warns = read_jsonl(self._notes_path(commit_id), what)
         for w in warns:
-            logger.warning("%s", w)
+            logger.warning(w)
         notes = []
         for r in records:
             time, text = r.get("time"), r.get("text")
             if type(time) is str and type(text) is str:
                 notes.append(Note(commit_id=commit_id, time=time, text=text))
             else:
-                logger.warning("%s: 不正なコメントを読み飛ばしました", what)
+                logger.warning(f"{what}: 不正なコメントを読み飛ばしました")
         return notes
 
     def _notes_path(self, commit_id: int) -> Path:
@@ -693,7 +692,7 @@ class History:
     def _oplog(self) -> list[dict]:
         records, warns = read_jsonl(self._bvc_dir / "oplog.jsonl", "oplog.jsonl")
         for w in warns:
-            logger.warning("%s", w)
+            logger.warning(w)
         return records
 
     def pins(self) -> list[Pin]:
