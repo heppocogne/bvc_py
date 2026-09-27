@@ -1,0 +1,15 @@
+title = "Custom Gitleaks Config"
+
+# 1. Windowsのローカルパス（例: C:\Users\xxx）を検出
+[[rules]]
+id = "windows-local-path"
+description = "Detect hardcoded Windows local path"
+regex = '''(?i)[a-z]:[\\|/]users[\\|/][a-z0-9_-]+'''
+keywords = ["users"]
+
+# 2. macOS/Linuxのユーザーローカルパス（例: /Users/xxx, /home/xxx）を検出
+[[rules]]
+id = "unix-local-path"
+description = "Detect hardcoded Unix local path"
+regex = '''/(Users|home)/[a-zA-Z0-9_-]+'''
+keywords = ["Users", "home"]
