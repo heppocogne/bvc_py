@@ -175,7 +175,7 @@ def _check_element(e: str, p: str) -> None:
         raise UnsafePath(f"末尾がドットまたは空白の要素があります: {p!r}", path=p)
     for c in e:
         if c in _INVALID_CHARS or ord(c) < 32 or ord(c) == 127:
-            raise UnsafePath(f"使用できない文字を含みます: {p!r}", path=p)
+            raise UnsafePath(f"使用できない文字{c!r}を含みます: {p!r}", path=p)
     if e.split(".", 1)[0].rstrip(" ").upper() in _RESERVED:
         raise UnsafePath(f"Windows の予約名を含みます: {p!r}", path=p)
 

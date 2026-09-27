@@ -142,7 +142,14 @@ class TestRename(CliTestCase):
         self.bvc("init", "--track", "*.bin")
         (self.tmp / "a.bin").unlink()
         self.write("b.bin", b"bbb")
-        for spec in ("a.bin", "=b.bin", "a.bin=", "x.bin=b.bin"):
+        for spec in (
+            "a.bin",
+            "=b.bin",
+            "a.bin=",
+            "x.bin=b.bin",
+            "a=1.bin=b.bin",
+            "a.bin=b=1.bin",
+        ):
             with self.subTest(spec=spec):
                 code, out, _ = self.bvc("--json", "commit", "--rename", spec)
                 self.assertEqual(code, 2)

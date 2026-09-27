@@ -294,6 +294,14 @@ class TestChecks(unittest.TestCase):
             with self.subTest(p=p), self.assertRaises(UnsafePath):
                 fsutil.check_relpath(p)
 
+    def test_check_relpath_bad_char_shown_in_message(self):
+        # 使えない文字そのものをメッセージに含める(不親切な「使えないパスです」対策)
+        for p, ch in [("a<b", "<"), ("a\x00b", "\x00")]:
+            with self.subTest(p=p):
+                with self.assertRaises(UnsafePath) as ctx:
+                    fsutil.check_relpath(p)
+                self.assertIn(repr(ch), str(ctx.exception))
+
 
 class TestResolveInWorkdir(helpers.TempDirTestCase):
     def setUp(self):

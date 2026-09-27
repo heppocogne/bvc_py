@@ -681,6 +681,10 @@ def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
         old, sep, new = spec.partition("=")
         if not (sep and old and new):
             raise UsageError(f"--renameは 旧=新 の形式で指定してください: {spec}")
+        if "=" in old or "=" in new:
+            raise UsageError(
+                f"--rename: 旧・新のパスに'='は使えません(旧=新の区切りと区別できないため): {spec}"
+            )
         renames.append((old, new))
     with Repo.open(start) as repo:
         result = repo.commit(
