@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Final
+from typing import Final, Sequence
 
 # bvc のモジュールを import するため、src/ を sys.path に追加
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -54,10 +54,10 @@ def measure_combination(
     workdir: Path,
     chunker: dict,
     compression: str,
-    data_sizes: list[int],
+    generations: Sequence[bytes],
 ) -> dict:
     # 1つの (chunker, compression) 組み合わせを計測する。
-    # data_sizes: 各世代のファイルサイズ
+    # generations: 各世代でファイルに書き込む内容(疑似データまたは実ファイルの内容)
     results = {"chunker": chunker, "compression": compression}
     times = []
     sizes = []
@@ -73,13 +73,12 @@ def measure_combination(
         times.append(elapsed)
 
         # 各世代でコミット
-        for gen, size in enumerate(data_sizes):
-            data = generate_test_data(size, variation=gen)
+        for gen, data in enumerate(generations):
             (workdir / "data.bin").write_bytes(data)
 
             start = time.perf_counter()
             with Repo.open(workdir) as repo:
-                repo.commit(f"gen {gen + 1}: {size} bytes")
+                repo.commit(f"gen {gen + 1}: {len(data)} bytes")
             elapsed = time.perf_counter() - start
             times.append(elapsed)
 
@@ -94,7 +93,7 @@ def measure_combination(
         results["times"] = times
         results["total_time"] = sum(times)
         results["final_size"] = sizes[-1] if sizes else 0
-        results["total_data_size"] = sum(data_sizes)
+        results["total_data_size"] = sum(len(d) for d in generations)
         results["error"] = None
     except Exception as e:  # noqa: BLE001
         results["error"] = str(e)
@@ -102,14 +101,32 @@ def measure_combination(
     return results
 
 
+def load_input_generations(paths: list[Path]) -> list[bytes]:
+    # 実ファイルの並びを世代として読み込む(各パスが1世代分の内容)
+    generations = []
+    for p in paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"入力ファイルが見つかりません: {p}")
+        generations.append(p.read_bytes())
+    return generations
+
+
 def main():
     parser = argparse.ArgumentParser(description="計測スクリプト(M7-2)")
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "--sizes",
         type=int,
         nargs="+",
-        default=[1000000, 1200000, 1100000, 1300000, 1050000],
-        help="各世代のファイルサイズ(バイト)",
+        help="疑似データを使う場合の各世代のファイルサイズ(バイト)。"
+        "既定は [1000000, 1200000, 1100000, 1300000, 1050000]",
+    )
+    source.add_argument(
+        "--input-files",
+        type=Path,
+        nargs="+",
+        help="実ファイルを世代として使う(各ファイルが1世代分の内容。古い順に指定)。"
+        "指定時は --sizes の疑似データの代わりにこれらの内容でコミットする",
     )
     parser.add_argument(
         "--chunker",
@@ -126,7 +143,20 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"計測設定: {len(args.sizes)} 世代、ファイルサイズ {args.sizes}")
+    if args.input_files is not None:
+        try:
+            generations = load_input_generations(args.input_files)
+        except FileNotFoundError as e:
+            parser.error(str(e))
+        sizes_desc = [len(d) for d in generations]
+        print(f"計測設定: 実ファイル {len(generations)} 世代、サイズ {sizes_desc}")
+        print(f"  入力: {[str(p) for p in args.input_files]}")
+    else:
+        sizes = args.sizes or [1000000, 1200000, 1100000, 1300000, 1050000]
+        generations = [
+            generate_test_data(size, variation=gen) for gen, size in enumerate(sizes)
+        ]
+        print(f"計測設定: 疑似データ {len(sizes)} 世代、ファイルサイズ {sizes}")
     print(f"計測対象: chunker {len(CHUNKERS)}, compression {len(COMPRESSIONS)}")
     print()
 
@@ -150,7 +180,7 @@ def main():
             # 一時フォルダを作成
             with tempfile.TemporaryDirectory() as tmpdir:
                 result = measure_combination(
-                    Path(tmpdir), chunker, compression, args.sizes
+                    Path(tmpdir), chunker, compression, generations
                 )
                 results.append(result)
                 if result["error"]:
