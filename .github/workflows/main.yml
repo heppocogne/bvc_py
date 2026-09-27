@@ -1,0 +1,26 @@
+name: Update Table of Contents (Node.js)
+
+on:
+  push
+
+jobs:
+  update_toc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update Table of Contents
+        run: |
+          npm install markdown-toc
+          markdown-toc -i docs/01_要件定義書.md
+          markdown-toc -i docs/02_仕様書.md
+          markdown-toc -i docs/03_設計書.md
+          markdown-toc -i docs/04_テスト観点.md
+          markdown-toc -i docs/05_実装計画書.md
+          markdown-toc -i docs/06_実機確認手順書.md
+
+      - name: Commit & Push
+        run:  |
+          git config --global user.name "update_toc:github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/*.md
+          git diff --staged --exit-code || (git commit -m "Update ToC" && git push)
