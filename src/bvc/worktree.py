@@ -301,7 +301,7 @@ class Worktree:
                 f = open(p, "rb")  # noqa: SIM115
             except FileNotFoundError as e:
                 raise FileChanging(
-                    f"読み取り中にファイルが消えました: {rel}", path=rel
+                    f"読み取り中にファイルが削除されました: {rel}", path=rel
                 ) from e
             except OSError as e:
                 raise FileBusy(
@@ -330,7 +330,7 @@ class Worktree:
                 st2 = os.stat(p)
             except FileNotFoundError as e:
                 raise FileChanging(
-                    f"読み取り中にファイルが消えました: {rel}", path=rel
+                    f"読み取り中にファイルが削除されました: {rel}", path=rel
                 ) from e
             if (st1.st_size, st1.st_mtime_ns) == (
                 st2.st_size,
@@ -341,7 +341,7 @@ class Worktree:
                 logger.info("書き込み中のため読み直します: %s", rel)
                 time.sleep(RETRY_WAIT)
         raise FileChanging(
-            f"ファイルが書き込み中です(読み取りの前後で変わりました): {rel}", path=rel
+            f"ファイルが書き込み中です(読み取りの中に変更されました): {rel}", path=rel
         )
 
     # --- stat キャッシュ(M2-8、設計書 2.5節) ---
@@ -511,7 +511,7 @@ class Worktree:
             found = [q for q in pool if q.casefold() == p.casefold()]
             if len(found) == 1:
                 return found[0]
-            raise UsageError(f"--rename: {p} は{what}ではありません", path=p)
+            raise UsageError(f"--rename: {p}は{what}ではありません", path=p)
 
         out: list[tuple[str, str]] = []
         used_g: set[str] = set()
@@ -551,7 +551,7 @@ class Worktree:
                 m = self.store.build_manifest(f, chunker)
         except FileNotFoundError as e:
             raise FileChanging(
-                f"読み取り中にファイルが消えました: {rel}", path=rel
+                f"読み取り中にファイルが削除されました: {rel}", path=rel
             ) from e
         except OSError as e:
             raise FileBusy(f"ファイルを読み取れません: {rel}({e})", path=rel) from e
@@ -698,7 +698,7 @@ class Worktree:
         for sha in sorted(set(target_tree.values())):
             if not self.store.manifest_ok(sha, "exists"):
                 raise BrokenVersion(
-                    f"移動先の版の保存データが壊れているか欠けています(マニフェスト {sha})",
+                    f"移動先の版の保存データが破損もしくは欠損しています(マニフェスト {sha})",
                     sha=sha,
                 )
         tracked_fold = {rel.casefold(): rel for rel in tracked}
@@ -737,7 +737,7 @@ class Worktree:
                 what = "リンク"
             raise SafetyAbort(
                 f"書き出し先に追跡対象外の{what}があります: {sub}\n"
-                "  保存されていない内容を上書きしないよう中止しました。移動するか削除してから、やり直してください",
+                "  保存されていない内容を上書きしないよう中止しました。移動するか削除してからやり直してください",
                 path=sub,
             )
         resolve_in_workdir(self.workdir, rel)
@@ -779,7 +779,7 @@ class Worktree:
         # 置き換えが済んだら on_committed(head) で HEAD を更新する。
         if os.path.lexists(os_path(self._journal_file)):
             raise BvcError(
-                "中断した復元の記録(journal.json)が残っています。bvc を実行し直してください"
+                "中断した復元の記録(journal.json)が残っています。bvcを実行し直してください"
             )
         tracked = {rel: self._names.get(rel, rel) for rel in current.tree}
         self._check_target(target_tree, tracked)
@@ -834,7 +834,7 @@ class Worktree:
             except BaseException as e2:  # noqa: BLE001
                 raise FileBusy(
                     f"復元に失敗し、元に戻す処理も完了できませんでした({e2})。"
-                    "次に bvc を実行したときに、もう一度元に戻します",
+                    "次にbvcを実行したときに、もう一度元に戻します",
                 ) from e
             if isinstance(e, OSError):
                 raise FileBusy(
@@ -855,7 +855,7 @@ class Worktree:
         if state == "staging":
             if self._list_dir(self._txn / "old"):
                 raise BvcError(
-                    f"中断した復元の記録と作業域の内容が一致しません。{self._txn / 'old'} を確認してください"
+                    f"中断した復元の記録と作業域の内容が一致しません。{self._txn / 'old'}を確認してください"
                 )
             self._discard_txn()
             logger.warning(
@@ -872,7 +872,7 @@ class Worktree:
             self._names = {}
             self._complete(journal, ops, on_committed, has_journal=True)
             logger.warning(
-                "中断していた復元を完了しました(版 %d)", journal["head"]["at"]
+                "中断していた復元を完了しました(版%d)", journal["head"]["at"]
             )
 
     def _plan(
@@ -954,7 +954,7 @@ class Worktree:
             st = os.lstat(os_path(src))
         except FileNotFoundError:
             raise FileChanging(
-                f"復元の途中でファイルが消えました: {op.path}", path=op.path
+                f"復元の途中でファイルが削除されました: {op.path}", path=op.path
             ) from None
         if (
             is_link_or_reparse(st)
@@ -985,8 +985,8 @@ class Worktree:
                     or (st.st_size, st.st_mtime_ns) != op.staged
                 ):
                     raise BvcError(
-                        f"元に戻せません: {op.path} が復元の途中で変更されたか、見つかりません。"
-                        f"{self._txn} と {self._journal_file} を確認してください",
+                        f"元に戻せません: {op.path}が復元の途中で変更されたか、見つかりません。"
+                        f"{self._txn}と{self._journal_file}を確認してください",
                         path=op.path,
                     )
                 replace(dst, new, f"unswap:{op.n}")
@@ -998,8 +998,8 @@ class Worktree:
                 src = self._work_path(op.src)
                 if os.path.lexists(os_path(src)):
                     raise BvcError(
-                        f"元に戻せません: {op.src} に別のファイルがあります。"
-                        f"元の内容は {old} にあります",
+                        f"元に戻せません: {op.src}に別のファイルがあります。"
+                        f"元の内容は{old}にあります",
                         path=op.src,
                     )
                 makedirs(src.parent)
@@ -1033,7 +1033,7 @@ class Worktree:
                 raise
             raise BvcError(
                 f"作業ファイルの復元は完了しましたが、後処理に失敗しました({e})。"
-                "次に bvc を実行したときに自動で完了します"
+                "次にbvcを実行したときに自動で完了します"
             ) from e
 
     # --- 作業域と journal ---
@@ -1080,7 +1080,7 @@ class Worktree:
         except (KeyError, TypeError, ValueError, UnsafePath) as e:
             raise CorruptData(
                 f"中断した復元の記録(journal.json)が壊れています({e})。"
-                f"何も変更せずに中止しました。{self._journal_file} と {self._txn} を確認してください"
+                f"何も変更せずに中止しました。{self._journal_file}と{self._txn}を確認してください"
             ) from e
         return data, ops
 
@@ -1088,7 +1088,7 @@ class Worktree:
         # 作業域を空にする。old/ に残骸があれば、元のファイルの可能性があるので中止する。
         if self._list_dir(self._txn / "old"):
             raise BvcError(
-                f"作業域に前回の復元の残骸があります。{self._txn / 'old'} を確認してください"
+                f"作業域に前回の復元の残骸があります。{self._txn / 'old'}を確認してください"
             )
         self._discard_dir(self._txn / "new")
 
@@ -1115,7 +1115,7 @@ class Worktree:
         self._discard_dir(self._txn / "new")
         if self._list_dir(self._txn / "old"):
             logger.warning(
-                "作業域に前回の復元の残骸があります。%s を確認してください",
+                "作業域に前回の復元の残骸があります。%sを確認してください",
                 self._txn / "old",
             )
 

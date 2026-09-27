@@ -319,9 +319,7 @@ def _print_json(args: argparse.Namespace, result: Any) -> None:
     # 結果を1つの JSON として stdout に書く。"changed" と "warnings" を必ず含める(仕様書 2.2節・5節)。
     data = to_jsonable(result)
     if not isinstance(data, dict) or "changed" not in data:
-        raise TypeError(
-            f"--json の出力に changed がありません: {type(result).__name__}"
-        )
+        raise TypeError(f"--jsonの出力にchangedがありません: {type(result).__name__}")
     data["warnings"] = list(getattr(args, "warnings", None) or ())
     # 出力先が UTF-8 でなければ ASCII だけで書く(\\uXXXX。どの文字コードでも解析できる)
     ascii_only = _encoding_of(sys.stdout) not in ("utf-8", "utf-16", "utf-32")
@@ -366,9 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="<パス>",
         type=Path,
         default=None,
-        help=f"作業フォルダを指定する(省略時はカレントから上位へ {BVC_DIR} を探す)",
+        help=f"作業フォルダを指定する(省略時はカレントから上位へ{BVC_DIR}を探す)",
     )
-    parser.add_argument("--json", action="store_true", help="結果を JSON で出力する")
+    parser.add_argument("--json", action="store_true", help="結果をJSONで出力する")
     parser.add_argument(
         "-q", dest="quiet", action="store_true", help="通常の出力を抑制する"
     )
@@ -379,26 +377,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="リポジトリを作成する")
     p.add_argument(
-        "path", nargs="?", default=None, help="作業フォルダ(省略時は -C またはカレント)"
+        "path",
+        nargs="?",
+        default=None,
+        help="作業フォルダ(省略時はカレントディレクトリ。-Cでも指定可)",
     )
     p.add_argument(
         "--track",
         action="append",
         required=True,
         metavar="<パターン>",
-        help="追跡パターン(複数指定可)",
+        help="追跡パターン(複数指定可) 例: --track '*.bin' --track '*.exe'",
     )
     p.add_argument(
         "--ignore",
         action="append",
         default=[],
         metavar="<パターン>",
-        help="除外パターン(複数指定可)",
+        help="除外パターン(複数指定可) 例: --ignore '*.txt' --ignore '*.log'",
     )
     p.add_argument(
         "--git",
         action="store_true",
-        help="git 連携を有効にし、bvc.lock を作ってフックを設置する",
+        help="git連携を有効にし、bvc.lockを作ってフックを設置する",
     )
 
     p = sub.add_parser("commit", help="追跡ファイルの現状を版として記録する")
@@ -457,7 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="コメントの本文",
     )
     p.add_argument(
-        "-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は @)"
+        "-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は@)"
     )
 
     p = sub.add_parser("branch", help="ブランチの一覧・名前の付け外し")
@@ -469,19 +470,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
     bp.add_argument(
-        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)"
+        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は@)"
     )
     bp = bsub.add_parser("unname", help="名前を外す")
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
 
-    p = sub.add_parser("discard", help="版に削除の印を付ける(データは gc まで残る)")
+    p = sub.add_parser("discard", help="版に削除の印を付ける(データはgcまで残る)")
     p.add_argument(
-        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)"
+        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は@)"
     )
     p.add_argument(
         "--force",
         action="store_true",
-        help="git のコミットが参照している版でも削除する",
+        help="gitのコミットが参照している版でも削除する",
     )
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
@@ -491,40 +492,40 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="削除対象と容量を表示するだけで、何も削除しない",
     )
-    p.add_argument("--no-git", action="store_true", help="git の履歴による保護を省く")
+    p.add_argument("--no-git", action="store_true", help="gitの履歴による保護を省く")
 
-    p = sub.add_parser("verify", help="保存データを検査する(異常が残れば終了コード 1)")
+    p = sub.add_parser("verify", help="保存データを検査する(異常があれば終了コード1)")
     p.add_argument(
         "--quick", action="store_true", help="チャンクの存在とヘッダだけを確認する"
     )
     p.add_argument(
         "--repair",
         action="store_true",
-        help="壊れたデータを作業フォルダのファイルから修復する",
+        help="壊れたデータを作業フォルダのファイルから修復する(完全な修復は保証しない)",
     )
 
-    p = sub.add_parser("sync", help="bvc.lock の内容に作業ファイルを合わせる(git 連携)")
+    p = sub.add_parser("sync", help="bvc.lock の内容に作業ファイルを合わせる(git連携)")
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
     p.add_argument(
         "--require-lock",
         action="store_true",
-        help="bvc.lock が無ければ終了コード 1 にする",
+        help="bvc.lockが無ければ終了コード1にする",
     )
 
-    p = sub.add_parser("git", help="git 連携(フックの設置、フック用のコマンド)")
+    p = sub.add_parser("git", help="git連携(フックの設置、フック用のコマンド)")
     gsub = p.add_subparsers(dest="git_command", metavar="<操作>", title="操作")
     gsub.required = True
     gsub.add_parser(
-        "install-hooks", help="pre-commit / post-commit / post-checkout を設置する"
+        "install-hooks", help="pre-commit/post-commit/post-checkoutを設置する"
     )
-    gsub.add_parser("pin", help="(フック用)git の HEAD と bvc の版の対応を記録する")
+    gsub.add_parser("pin", help="(フック用)gitのHEADとbvcの版の対応を記録する")
     gsub.add_parser("pre-commit", help="(フック用)")
     gp = gsub.add_parser("post-checkout", help="(フック用)")
     gp.add_argument(
         "hook_args",
         nargs="*",
         metavar="<引数>",
-        help="git が渡す引数(前の HEAD、新しい HEAD、フラグ)",
+        help="git が渡す引数(前のHEAD、新しい HEAD、フラグ)",
     )
 
     return parser
@@ -643,7 +644,7 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
                 hooks = repo.install_hooks()
             except BvcError as e:
                 logger.warning(
-                    "git のフックを設置できませんでした: %s(bvc git install-hooks で設置できます)",
+                    "gitのフックを設置できませんでした: %s(bvc git install-hooksで設置できます)",
                     e,
                 )
     commit = entry.commit
@@ -659,7 +660,7 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
         )
         return EXIT_OK
     logger.info(
-        "リポジトリを作成しました: %s(版 %d、追跡ファイル %d 件)",
+        "リポジトリを作成しました: %s(版%d、追跡ファイル%d件)",
         repo.workdir,
         entry.id,
         len(commit.tree) if commit is not None else 0,
@@ -667,12 +668,12 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
     if args.git:
         lock_file = repo.config.git.lock_file
         logger.info(
-            "git 連携を有効にしました。%s を git add してコミットしてください",
+            "git連携を有効にしました。%sをgit addしてコミットしてください",
             lock_file,
         )
         if hooks is not None:
             _log_hooks(hooks)
-        logger.info("推奨する .gitignore:")
+        logger.info(".gitignoreに以下のファイルを追加して下さい:")
         for line in [f"/{BVC_DIR}/", *args.track]:
             logger.info("  %s", line)
     return EXIT_OK
@@ -684,7 +685,7 @@ def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
     for spec in args.renames or ():
         old, sep, new = spec.partition("=")
         if not (sep and old and new):
-            raise UsageError(f"--rename は 旧=新 の形式で指定してください: {spec}")
+            raise UsageError(f"--renameは 旧=新 の形式で指定してください: {spec}")
         renames.append((old, new))
     with Repo.open(start) as repo:
         result = repo.commit(
@@ -697,11 +698,11 @@ def _cmd_commit(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, result)
         return EXIT_OK
     if not result.changed:
-        logger.info("変更なし")
+        logger.info("変更がありません")
         return EXIT_OK
     s = result.state
     logger.info(
-        "版 %d を作成しました%s(新規データ %s / %s)",
+        "版%dを作成しました%s(新規データ %s/%s)",
         result.commit.id,
         "(新しいブランチを作成)" if result.new_branch else "",
         format_size(s.new_bytes),
@@ -771,7 +772,7 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, {"changed": True, "note": note})
     else:
         logger.info(
-            "版 %d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit)
+            "版%d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit)
         )
     return EXIT_OK
 
@@ -794,11 +795,11 @@ def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
         _print_json(args, {"changed": True, "branch": info})
     elif args.branch_command == "name":
         logger.info(
-            "ブランチ(先端 %s)に名前 '%s' を付けました", _or_none(info.tip), args.name
+            "ブランチ(先端 %s)に名前'%s'を付けました", _or_none(info.tip), args.name
         )
     else:
         logger.info(
-            "ブランチ(先端 %s)から名前 '%s' を外しました", _or_none(info.tip), args.name
+            "ブランチ(先端%s)から名前'%s'を外しました", _or_none(info.tip), args.name
         )
     return EXIT_OK
 
@@ -883,13 +884,13 @@ def _cmd_git(args: argparse.Namespace, start: Path) -> int:
         _log_hooks(result)
     elif cmd == "pin" and result.changed:
         logger.info(
-            "git のコミット %s を版 %d に対応付けました",
+            "gitのコミット%sを版%dに対応付けました",
             result.pin.git[:12],
             result.pin.bvc,
         )
     elif cmd == "pre-commit" and result.auto_commit is not None:
         logger.info(
-            "bvc: 未コミットの変更を版 %d に自動コミットしました", result.auto_commit.id
+            "bvc: 未コミットの変更を版%dに自動コミットしました", result.auto_commit.id
         )
     return EXIT_OK
 
@@ -906,8 +907,8 @@ def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
             raise
         bar = "=" * 60
         logger.error(
-            "%s\n%s\nbvc sync に失敗しました。git の作業ツリー(コード)とバイナリが食い違っています"
-            "(非同期状態)。\n原因を解消してから bvc sync を実行してください。\n%s",
+            "%s\n%s\nbvc syncに失敗しました。gitの作業ツリー(コード)とバイナリが食い違っています"
+            "(非同期状態)。\n原因を解消してからbvc syncを実行してください。\n%s",
             e,
             bar,
             bar,
@@ -926,13 +927,13 @@ def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
 def _log_hooks(r: HooksResult) -> None:
     if r.installed:
         logger.info(
-            "git のフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir
+            "gitのフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir
         )
     if r.already:
         logger.info("設置済みのフック: %s", ", ".join(r.already))
     for name, line in r.manual.items():
         logger.warning(
-            "既存のフック %s があるため設置していません。下記の処理を追加して下さい:\n  %s",
+            "既存のフック%sがあるため設置していません。下記の処理を追加して下さい:\n  %s",
             Path(r.hooks_dir) / name,
             line,
         )
@@ -962,15 +963,15 @@ _COMMANDS: Final[dict[str, Any]] = {
 
 def format_move(r: MoveResult) -> list[str]:
     if not r.changed:
-        return [f"変更なし(現在位置は版 {r.after.at} です)"]
+        return [f"変更なし(現在位置は版{r.after.at}です)"]
     if r.after.at == r.before.at:
-        return [f"版 {r.after.at} のまま、現在のブランチを切り替えました"]
-    lines = [f"版 {r.after.at} に移動しました"]
+        return [f"版{r.after.at}のまま、現在のブランチを切り替えました"]
+    lines = [f"版{r.after.at}に移動しました"]
     if r.skipped:
-        lines.append(f"  壊れた版 {', '.join(map(str, r.skipped))} を飛ばしました")
+        lines.append(f"  壊れた版 {', '.join(map(str, r.skipped))}を飛ばしました")
     if r.auto_commit is not None:
         lines.append(
-            f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})"
+            f"  未コミットの変更を版{r.auto_commit.id}に自動コミットしました({r.auto_commit.message})"
         )
     lines += [f"  restored: {p}" for p in r.restored]
     lines += [f"  deleted:  {p}" for p in r.deleted]
@@ -981,12 +982,10 @@ def format_sync(r: SyncResult) -> list[str]:
     if not r.lock_found:
         return []  # 警告は repo 層が出している
     if not r.changed:
-        return [f"変更なし(bvc.lock は現在位置の版 {r.after.at} と同じ内容です)"]
+        return [f"変更なし(bvc.lockは現在位置の版{r.after.at}と同じ内容です)"]
     lines = format_move(r)
     if r.imported is not None:
-        lines.insert(
-            1, f"  bvc.lock の内容から版 {r.imported.id} を作成しました(import)"
-        )
+        lines.insert(1, f"  bvc.lockの内容から版{r.imported.id}を作成しました(import)")
     return lines
 
 
@@ -1013,18 +1012,18 @@ def format_branches(branches: list[BranchInfo]) -> str:
     for b, n in zip(branches, names):
         mark = "*" if b.is_current else " "
         lines.append(
-            f"{mark} {n}{' ' * (w - _width(n))}  先端 {_or_none(b.tip)}  分岐元 {_or_none(b.fork)}"
+            f"{mark} {n}{' ' * (w - _width(n))}  先端: {_or_none(b.tip)}  分岐元: {_or_none(b.fork)}"
         )
     return "\n".join(lines)
 
 
 def format_discard(r: DiscardResult) -> list[str]:
-    lines = [f"版 {r.discarded} に削除の印を付けました"]
+    lines = [f"版{r.discarded}に削除の印を付けました"]
     if r.after.at != r.before.at:
-        lines.append(f"  版 {r.after.at} に移動しました")
+        lines.append(f"  版{r.after.at}に移動しました")
         if r.auto_commit is not None:
             lines.append(
-                f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})"
+                f"  未コミットの変更を版{r.auto_commit.id}に自動コミットしました({r.auto_commit.message})"
             )
         lines += [f"  restored: {p}" for p in r.restored]
         lines += [f"  deleted:  {p}" for p in r.deleted]
@@ -1039,35 +1038,34 @@ def format_gc(r: GcReport) -> str:
         return "削除対象がありません"
     versions = ", ".join(map(str, r.deleted_commits)) or "なし"
     detail = (
-        f"版 {versions}、マニフェスト {r.deleted_manifests}、チャンク {r.deleted_chunks}、"
-        f"一時ファイル {r.deleted_tmp}(合計 {format_size(r.freed_bytes)})"
+        f"版{versions}、マニフェスト{r.deleted_manifests}、チャンク{r.deleted_chunks}、"
+        f"一時ファイル{r.deleted_tmp}(合計{format_size(r.freed_bytes)})"
     )
-    return f"削除対象: {detail}" if r.dry_run else f"削除しました: {detail}"
+    return f"削除対象: {detail}" if r.dry_run else f"{detail}を削除しました"
 
 
 def format_verify(r: VerifyReport) -> list[str]:
     # 最後の行が結果(異常が残っていれば、壊れた版の一覧)。
     lines = [
         (
-            f"検査しました{'(--quick)' if r.quick else ''}: チャンク {r.checked_chunks}、"
-            f"マニフェスト {r.checked_manifests}、版 {r.checked_commits}"
+            f"チャンク{r.checked_chunks}、"
+            f"マニフェスト{r.checked_manifests}、版{r.checked_commits}を検査しました{'(--quick)' if r.quick else ''}"
         )
     ]
     if r.repaired_chunks or r.repaired_manifests:
         lines.append(
-            f"  修復しました: チャンク {len(r.repaired_chunks)}、マニフェスト {len(r.repaired_manifests)}"
+            f"  チャンク{len(r.repaired_chunks)}、マニフェスト{len(r.repaired_manifests)}を修復しました"
         )
     if r.bad_chunks or r.bad_manifests:
         lines.append(
-            f"  欠損・破損: チャンク {len(r.bad_chunks)}、マニフェスト {len(r.bad_manifests)}"
+            f"  チャンク{len(r.bad_chunks)}、マニフェスト{len(r.bad_manifests)}は欠損/破損しています"
         )
     if r.ok:
         lines.append("異常はありません")
     else:
-        hint = "" if r.repair else "(verify --repair で修復できる場合があります)"
-        lines.append(
-            f"壊れた版があります: {', '.join(map(str, r.broken_commits))}{hint}"
-        )
+        hint = "" if r.repair else "(verify --repairで修復できる場合があります)"
+        broken = "\n".join(map(str, r.broken_commits))
+        lines.append(f"以下の版は壊れています{hint}\n{broken}")
     return lines
 
 
@@ -1093,7 +1091,7 @@ def _change_lines(s: WorkState, deleted_label: str = "missing") -> list[str]:
 
 def _short_time(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).strftime("%m-%d %H:%M")
+        return datetime.fromisoformat(iso).strftime("%Y/%m/%d %H:%M")
     except ValueError:
         return iso
 

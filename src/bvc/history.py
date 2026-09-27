@@ -63,18 +63,18 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
         renames = data.get("renames", [])
         stats = data.get("stats", {})
     except (KeyError, TypeError, UnsafePath) as e:
-        raise CorruptData(f"版 {file_id}: 内容が不正です({e})") from e
+        raise CorruptData(f"版{file_id}: 内容が不正です({e})") from e
     if commit_id != file_id:
-        raise CorruptData(f"版 {file_id}: ファイル名と番号が一致しません({commit_id})")
+        raise CorruptData(f"版{file_id}: ファイル名と番号が一致しません({commit_id})")
     # 祖先は自分より小さい番号だけ(壊れたデータでグラフが循環しないように)
     if parent is not None and (
         parent >= commit_id or not ancestors or ancestors[0] != parent
     ):
-        raise CorruptData(f"版 {file_id}: 親の記録が不正です")
+        raise CorruptData(f"版{file_id}: 親の記録が不正です")
     if any(b >= a for a, b in itertools.pairwise(ancestors)) or any(
         a >= commit_id for a in ancestors
     ):
-        raise CorruptData(f"版 {file_id}: 祖先の記録が不正です")
+        raise CorruptData(f"版{file_id}: 祖先の記録が不正です")
     if (
         type(time) is not str
         or kind not in KINDS
@@ -83,7 +83,7 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
         or not isinstance(renames, list)
         or not isinstance(stats, dict)
     ):
-        raise CorruptData(f"版 {file_id}: 内容が不正です")
+        raise CorruptData(f"版{file_id}: 内容が不正です")
 
     # パスとハッシュは使う前に検査する(仕様書 2.10節)。不正なら「壊れた版」
     # bvc は NFC で記録するので、正規化で変わるパスも不正とする(同じパスの重複を黙って1つにしないため)
@@ -184,7 +184,7 @@ class History:
             self._commits[file_id] = commit
             if bad_tree:
                 logger.warning(
-                    "版 %d: 不正なパスまたはハッシュを含みます(壊れた版として扱います)",
+                    "版%d: 不正なパスまたはハッシュを含みます(壊れた版として扱います)",
                     file_id,
                 )
                 self._broken.add(file_id)
@@ -206,7 +206,7 @@ class History:
             data = load_json(self._bvc_dir / "branches.json", "branches.json")
             names_obj = data.get("names", {})
             if not isinstance(names_obj, dict):
-                raise CorruptData("branches.json: names が不正です")
+                raise CorruptData("branches.json: namesが不正です")
         except FileNotFoundError:
             names_obj = {}
         except CorruptData as e:
@@ -269,10 +269,10 @@ class History:
     def get(self, commit_id: int) -> Commit:
         # 版を取得(M2-3)。無い・読めない版は RevisionError。
         if commit_id not in self._commits:
-            raise RevisionError(f"版 {commit_id} は存在しません")
+            raise RevisionError(f"版{commit_id}は存在しません")
         commit = self._commits[commit_id]
         if commit is None:
-            raise RevisionError(f"版 {commit_id} は読み込めません")
+            raise RevisionError(f"版{commit_id}は読み込めません")
         return commit
 
     def is_readable(self, commit_id: int) -> bool:
@@ -284,7 +284,7 @@ class History:
         return self._commits.get(commit_id) is None or commit_id in self._broken
 
     def living(self) -> Iterable[Commit]:
-        # 生きている(読める)版を新しい順に返す(M2-3)。
+        # 有効な(読める)版を新しい順に返す(M2-3)。
         for cid in self.ids():
             c = self._commits[cid]
             if c is not None:
@@ -298,11 +298,11 @@ class History:
         return self._eparent.get(commit_id)
 
     def children(self, commit_id: int) -> list[int]:
-        # 生きている子(effective_parent 基準)(M2-4)。
+        # 有効な子(effective_parent 基準)(M2-4)。
         return list(self._children.get(commit_id, []))
 
     def branch_tip(self, branch: int) -> int | None:
-        # ブランチの先端(生きている版のうち最大の番号)(M2-4)。
+        # ブランチの先端(有効な版のうち最大の番号)(M2-4)。
         tips = [
             cid
             for cid, c in self._commits.items()
@@ -380,16 +380,16 @@ class History:
         if atom == "@":
             cur = head.at
             if cur not in self._commits:
-                raise RevisionError(f"現在位置の版 {cur} が存在しません")
+                raise RevisionError(f"現在位置の版{cur}が存在しません")
         elif atom.isdigit():
             try:
                 cur = check_id_str(atom)
             except UnsafePath:
                 raise RevisionError(f"版番号が不正です: {atom!r}") from None
             if cur not in self._commits:
-                raise RevisionError(f"版 {cur} は存在しません")
+                raise RevisionError(f"版{cur}は存在しません")
             if cur in self._discarded:
-                raise RevisionError(f"版 {cur} は削除済みです")
+                raise RevisionError(f"版{cur}は削除済みです")
         else:
             try:
                 check_branch_name(atom)
@@ -397,16 +397,16 @@ class History:
                 raise RevisionError(f"リビジョン式が不正です: {expr!r}") from None
             bid = self.branch_by_name(atom)
             if bid is None:
-                raise RevisionError(f"ブランチ '{atom}' はありません")
+                raise RevisionError(f"ブランチ'{atom}'が見つかりません")
             cur = self.branch_tip(bid)
             if cur is None:
-                raise RevisionError(f"ブランチ '{atom}' に生きている版がありません")
+                raise RevisionError(f"ブランチ'{atom}'に有効な版がありません")
 
         for op in ops:
             if op == "-":
                 p = self._eparent.get(cur)
                 if p is None:
-                    raise RevisionError(f"{expr}: 版 {cur} は根なので親がありません")
+                    raise RevisionError(f"{expr}: 版{cur}は根なので親がありません")
                 cur = p
             else:
                 cur = self._forward(cur, head.branch, expr)
@@ -419,13 +419,13 @@ class History:
             idx = path.index(cur)
             if idx > 0:
                 return path[idx - 1]
-        kids = self.children(cur)
-        if len(kids) == 1:
-            return kids[0]
-        if not kids:
-            raise RevisionError(f"{expr}: 版 {cur} は先端なので子がありません")
+        current_children = self.children(cur)
+        if len(current_children) == 1:
+            return current_children[0]
+        if not current_children:
+            raise RevisionError(f"{expr}: 版{cur}は先端なので子がありません")
         raise RevisionError(
-            f"{expr}: 版 {cur} には子が複数あり、進む先を決められません({kids})"
+            f"{expr}: 版{cur}には子が複数あるため、進む先を決められません({current_children})"
         )
 
     # --- HEAD ---
@@ -471,14 +471,14 @@ class History:
         commit_id = max([next_commit] + [i + 1 for i in self._commits])
         next_branch = max([next_branch] + [b + 1 for b in known_branches])
 
-        # ブランチ規則(設計書 4.5節): 親に生きている子が無ければ親のブランチを延長する
+        # ブランチ規則(設計書 4.5節): 親に有効な子が無ければ親のブランチを延長する
         if parent is None:
             ancestors: tuple[int, ...] = ()
             branch = next_branch
             next_branch += 1
         else:
             if parent not in self._commits:
-                raise RevisionError(f"親の版 {parent} は存在しません")
+                raise RevisionError(f"親の版{parent}は存在しません")
             ancestors = (parent,) + self._chain.get(parent, ())
             parent_commit = self._commits[parent]
             if parent_commit is not None and not self.children(parent):
@@ -503,7 +503,7 @@ class History:
         if os.path.lexists(os_path(commit_file)):
             # 版は不変。既存の版ファイルは決して上書きしない
             raise IntegrityError(
-                f"版 {commit_id} のファイルが既にあります。counters.json と版の記録が一致しません"
+                f"版{commit_id}のファイルが既にあります。counters.jsonと版の記録が一致しません"
             )
 
         atomic_write_json(
@@ -528,7 +528,7 @@ class History:
     def add_note(self, commit_id: int, text: str) -> Note:
         # コメントを追記する(M4-1、設計書 2.6節)。読み込み不可の版にも付けられる(仕様書 2.9節)。
         if commit_id not in self._commits:
-            raise RevisionError(f"版 {commit_id} は存在しません")
+            raise RevisionError(f"版{commit_id}は存在しません")
         note = Note(commit_id=commit_id, time=now_iso(), text=text)
         path = self._notes_path(commit_id)
         makedirs(path.parent)
@@ -538,9 +538,9 @@ class History:
     def discard(self, commit_id: int) -> None:
         # 削除印を付ける(M4-3、設計書 2.6節)。子は読み込み時のつなぎ直しで親へつながる(4.4節)。
         if commit_id not in self._commits:
-            raise RevisionError(f"版 {commit_id} は存在しません")
+            raise RevisionError(f"版{commit_id}は存在しません")
         if commit_id in self._discarded:
-            raise RevisionError(f"版 {commit_id} は削除済みです")
+            raise RevisionError(f"版{commit_id}は削除済みです")
         append_jsonl(
             self._bvc_dir / "discarded.jsonl",
             {"format": 1, "time": now_iso(), "id": commit_id},
@@ -564,7 +564,7 @@ class History:
         name = check_branch_name(name)
         branch = self.branch_by_name(name)
         if branch is None:
-            raise RevisionError(f"ブランチ '{name}' はありません")
+            raise RevisionError(f"ブランチ'{name}'が見つかりません")
         self._write_branches({b: n for b, n in self._branches.items() if b != branch})
         return branch
 
@@ -608,11 +608,11 @@ class History:
         try:
             data = load_json(self._bvc_dir / "branches.json", "branches.json")
         except FileNotFoundError:
-            return "ファイルがありません"
+            return "ファイルが見つかりません"
         except CorruptData as e:
             return str(e)
         if not isinstance(data.get("names"), dict):
-            return "branches.json: names が不正です"
+            return "branches.json: namesが不正です"
         return None
 
     def reset_branches(self) -> None:
@@ -625,7 +625,7 @@ class History:
             check_id(data["next_commit"])
             check_id(data["next_branch"])
         except FileNotFoundError:
-            return "ファイルがありません"
+            return "ファイルが見つかりません"
         except CorruptData as e:
             return str(e)
         except (KeyError, UnsafePath) as e:
@@ -664,13 +664,13 @@ class History:
         try:
             head = self.head()
         except FileNotFoundError:
-            return "ファイルがありません"
+            return "ファイルが見つかりません"
         except CorruptData as e:
             return str(e)
         if head.at not in self._commits:
-            return f"HEAD.json: 存在しない版 {head.at} を指しています"
+            return f"HEAD.json: 存在しない版{head.at}を指しています"
         if head.at in self._discarded:
-            return f"HEAD.json: 削除済みの版 {head.at} を指しています"
+            return f"HEAD.json: 削除済みの版{head.at}を指しています"
         return None
 
     def head_from_oplog(self) -> Head | None:
@@ -715,7 +715,7 @@ class History:
     def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> Pin:
         # git のコミットと版の対応を pins.jsonl に追記する(M6-5、設計書 2.6節)。
         if bvc_id not in self._commits:
-            raise RevisionError(f"版 {bvc_id} は存在しません")
+            raise RevisionError(f"版{bvc_id}は存在しません")
         pin = Pin(
             git=check_git_sha(git_sha), bvc=bvc_id, tree_hash=check_sha(tree_hash)
         )

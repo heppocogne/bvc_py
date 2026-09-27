@@ -168,7 +168,7 @@ def build_for_gc(root: Path) -> None:
 
 
 def check_gc_converged(root: Path) -> None:
-    # 生きている版はすべて復元でき、もう一度 gc すれば完了する
+    # 有効な版はすべて復元でき、もう一度 gc すれば完了する
     with Repo.open(root) as repo:
         for _ in range(2):
             for cid, expected in GC_LIVING.items():

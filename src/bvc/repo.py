@@ -95,7 +95,7 @@ def _missing_error(state: WorkState) -> MissingFiles:
             lines.append(
                 f"  ヒント: パターン外に同じ内容のファイルがあります: {', '.join(state.hints[p])}"
             )
-    lines.append("  削除として記録するには --allow-missing を指定してください")
+    lines.append("  削除として記録するには--allow-missingを指定してください")
     return MissingFiles(
         "\n".join(lines), missing=list(state.missing), hints=dict(state.hints)
     )
@@ -144,11 +144,13 @@ def _load_config(bvc_dir: Path) -> dict:
     try:
         return load_json(bvc_dir / "config.json", "config.json")
     except (FileNotFoundError, CorruptData) as e:
-        reason = "ファイルがありません" if isinstance(e, FileNotFoundError) else str(e)
+        reason = (
+            "ファイルが見つかりません" if isinstance(e, FileNotFoundError) else str(e)
+        )
         example = '{"format": 1, "track": ["*.bin"]}'
         raise BvcError(
-            f"設定ファイルを読み込めません({reason})。config.json は自動では復旧しません。\n"
-            f"  {bvc_dir / 'config.json'} を修正してください(最小の例: {example})"
+            f"設定ファイルを読み込めません({reason})。config.jsonは自動では復旧しません。\n"
+            f"  {bvc_dir / 'config.json'}を修正してください(最小の例: {example})"
         ) from e
 
 
@@ -175,24 +177,24 @@ def parse_config(data: dict) -> Config:
         or not track
         or not all(type(p) is str and p for p in track)
     ):
-        raise _config_error("track は空でない文字列のリストにしてください")
+        raise _config_error("trackは空でない文字列のリストにしてください")
     ignore = data.get("ignore", [])
     if not isinstance(ignore, list) or not all(type(p) is str and p for p in ignore):
-        raise _config_error("ignore は文字列のリストにしてください")
+        raise _config_error("ignoreは文字列のリストにしてください")
 
     def check_chunker(ck: Any, where: str) -> dict:
         if not isinstance(ck, dict):
-            raise _config_error(f"{where} は辞書にしてください")
+            raise _config_error(f"{where}は辞書にしてください")
         try:
             make_chunker(ck)
         except (ValueError, TypeError) as e:
-            raise _config_error(f"{where} の指定が不正です: {e}") from None
+            raise _config_error(f"{where}の指定が不正です: {e}") from None
         return ck
 
     def check_compression(c: Any, where: str) -> str:
         if c not in POLICIES:
             raise _config_error(
-                f"{where} は {', '.join(POLICIES)} のいずれかにしてください: {c!r}"
+                f"{where}は{', '.join(POLICIES)}のいずれかにしてください: {c!r}"
             )
         return c
 
@@ -201,7 +203,7 @@ def parse_config(data: dict) -> Config:
 
     rules = data.get("rules", [])
     if not isinstance(rules, list):
-        raise _config_error("rules はリストにしてください")
+        raise _config_error("rulesはリストにしてください")
     for i, r in enumerate(rules):
         where = f"rules[{i}]"
         if (
@@ -209,7 +211,7 @@ def parse_config(data: dict) -> Config:
             or type(r.get("pattern")) is not str
             or not r["pattern"]
         ):
-            raise _config_error(f"{where} には pattern(文字列)が必要です")
+            raise _config_error(f"{where}にはpattern(文字列)が必要です")
         if "chunker" in r:
             check_chunker(r["chunker"], f"{where}.chunker")
         if "compression" in r:
@@ -218,14 +220,14 @@ def parse_config(data: dict) -> Config:
     commit_verify = data.get("commit_verify", "exists")
     if commit_verify not in ("exists", "full"):
         raise _config_error(
-            f"commit_verify は exists か full にしてください: {commit_verify!r}"
+            f"commit_verifyはexistsかfullにしてください: {commit_verify!r}"
         )
     threads = data.get("threads", 0)
     if type(threads) is not int or threads < 0:
-        raise _config_error("threads は 0 以上の整数にしてください")
+        raise _config_error("threadsは0以上の整数にしてください")
     rename_threshold = data.get("rename_threshold", 0.5)
     if type(rename_threshold) not in (int, float) or not 0 < rename_threshold <= 1:
-        raise _config_error("rename_threshold は 0 より大きく 1 以下の数にしてください")
+        raise _config_error("rename_thresholdは0より大きく、1以下の数にしてください")
 
     for p in track + ignore + [r["pattern"] for r in rules]:
         compile_glob(p)
@@ -246,17 +248,17 @@ def parse_config(data: dict) -> Config:
 def _parse_git_config(git: Any, track: list[str], ignore: list[str]) -> GitConfig:
     # config.json の git(仕様書 4節)。bvc.lock は追跡対象にできない(バイナリとして記録されてしまうため)。
     if not isinstance(git, dict):
-        raise _config_error("git は辞書にしてください")
+        raise _config_error("gitは辞書にしてください")
     enabled = git.get("enabled", False)
     if type(enabled) is not bool:
-        raise _config_error("git.enabled は true か false にしてください")
+        raise _config_error("git.enabledはtrueかfalse にしてください")
     lock_file = git.get("lock_file", "bvc.lock")
     try:
         if check_relpath(lock_file) != lock_file:
             raise UnsafePath("")
     except UnsafePath:
         raise _config_error(
-            f"git.lock_file に使えないパスです: {lock_file!r:.80}"
+            f"git.lock_fileに使えないパスです: {lock_file!r:.80}"
         ) from None
     if (
         enabled
@@ -264,12 +266,12 @@ def _parse_git_config(git: Any, track: list[str], ignore: list[str]) -> GitConfi
         and not any(glob_match(p, lock_file) for p in ignore)
     ):
         raise _config_error(
-            f"git.lock_file({lock_file})が追跡パターンに一致します。ignore に加えるか、追跡パターンを変えてください"
+            f"git.lock_file({lock_file})が追跡パターンに一致します。ignoreに加えるか、追跡パターンを変えてください"
         )
     pre_commit = git.get("pre_commit", "snapshot")
     if pre_commit not in ("snapshot", "reject"):
         raise _config_error(
-            f"git.pre_commit は snapshot か reject にしてください: {pre_commit!r}"
+            f"git.pre_commitはsnapshotかreject にしてください: {pre_commit!r}"
         )
     return GitConfig(enabled=enabled, lock_file=lock_file, pre_commit=pre_commit)
 
@@ -317,7 +319,7 @@ class Repo:
         # git なら git 連携を有効にし、bvc.lock を作る(M6-3)。フックの設置は呼び出し側(install_hooks)。
         workdir = fsutil.real_path(workdir)
         if not fsutil.is_dir(workdir):
-            raise BvcError(f"作業フォルダがありません: {workdir}")
+            raise BvcError(f"作業フォルダが見つかりません: {workdir}")
         # gear の seed を自動生成(M7-1)
         ck = chunker or dict(DEFAULT_CHUNKER)
         if ck.get("name") == "gear" and "seed" not in ck:
@@ -343,11 +345,11 @@ class Repo:
         config = parse_config(config_data)
         found = cls.find_workdir(workdir)
         if found is not None:
-            raise BvcError(f"すでにリポジトリがあります: {found / BVC_DIR}")
+            raise BvcError(f"既にリポジトリがあります: {found / BVC_DIR}")
         if git and not Git(workdir).is_work_tree():
             raise BvcError(
-                f"git の作業ツリーの中ではないため、git 連携を有効にできません: {workdir}\n"
-                "  先に git init を実行してください(git が無い場合はインストールしてください)"
+                f"gitの作業ツリーの中ではないため、git連携を有効にできません: {workdir}\n"
+                "  先にgit initを実行してください(git が無い場合はインストールしてください)"
             )
 
         bvc_dir = workdir / BVC_DIR
@@ -419,7 +421,7 @@ class Repo:
         workdir = cls.find_workdir(start)
         if workdir is None:
             raise BvcError(
-                f"リポジトリが見つかりません({fsutil.real_path(start)} とその上位に {BVC_DIR} がありません)"
+                f"リポジトリが見つかりません({fsutil.real_path(start)}とその上位に{BVC_DIR}が見つかりません)"
             )
         bvc_dir = workdir / BVC_DIR
         lock = FileLock(bvc_dir / "lock")
@@ -451,7 +453,7 @@ class Repo:
         recovered: list[dict] = []
 
         def note(file: str, problem: str, action: str) -> None:
-            logger.warning("%s を自動で復旧しました: %s(%s)", file, action, problem)
+            logger.warning("%sを自動で復旧しました: %s(%s)", file, action, problem)
             recovered.append({"file": file, "problem": problem, "action": action})
 
         # branches.json は load の中で読むので、先に直しておく
@@ -467,14 +469,14 @@ class Repo:
             note(
                 "counters.json",
                 problem,
-                f"版・削除印・操作ログから再計算しました(次の版 {c['next_commit']}、次のブランチ {c['next_branch']})",
+                f"版・削除印・操作ログから再計算しました(次の版{c['next_commit']}、次のブランチ{c['next_branch']})",
             )
 
         problem = h.check_head()
         if problem is not None:
             head, how = self._guess_head()
             h.set_head(head)
-            note("HEAD.json", problem, f"{how}から現在位置を版 {head.at} にしました")
+            note("HEAD.json", problem, f"{how}から現在位置を版{head.at}にしました")
 
         problem = wt.check_index()
         if problem is not None:
@@ -487,14 +489,14 @@ class Repo:
 
         health = self._store.health
         if health.problem is not None:
-            problem = {"missing": "ファイルがありません"}.get(
+            problem = {"missing": "ファイルが見つかりません"}.get(
                 health.problem, health.problem
             )
             health.rebuild()
             note(
                 "health.json",
                 problem,
-                "空で作り直しました(壊れたデータは次の verify で再検出されます)",
+                "空で作り直しました(壊れたデータは次のbvc verifyで再検出されます)",
             )
 
         if recovered:
@@ -522,7 +524,7 @@ class Repo:
         living = [c for c in h.living() if h.tree_known(c.id)]
         if not living:
             raise BvcError(
-                f"HEAD.json を復旧できません(読み込める版がありません)。{BVC_DIR}/commits を確認してください"
+                f"HEAD.jsonを復旧できません(読み込める版がありません)。{BVC_DIR}/commitsを確認してください"
             )
         tree = self._worktree.state(
             base_tree={}, store_chunks=False, find_hints=False
@@ -532,7 +534,7 @@ class Repo:
                 return Head(c.id, c.branch), "作業ファイルと内容が一致する版"
         c = living[0]
         logger.warning(
-            "作業ファイルと内容が一致する版が見つからないため、最新の版 %d を現在位置にしました。"
+            "作業ファイルと内容が一致する版が見つからないため、最新の版%dを現在位置にしました。"
             "作業ファイルは変えていません(未コミットの変更として扱われます)",
             c.id,
         )
@@ -654,7 +656,7 @@ class Repo:
         target = h.effective_parent(head.at)
         if target is None:
             raise CannotMove(
-                f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at
+                f"版{head.at}は根(親の無い版)なので、これ以上戻れません", at=head.at
             )
         target, skipped = self._skip_broken(
             "undo", target, skip_broken, h.effective_parent
@@ -684,8 +686,8 @@ class Repo:
             kids = h.children(cur)
             if len(kids) > 1:
                 raise CannotMove(
-                    f"版 {cur} には子が複数あるため、進む先を決められません。"
-                    f"goto で版を指定してください(候補: {', '.join(map(str, kids))})",
+                    f"版{cur}には子が複数あるため、進む先を決められません。"
+                    f"gotoで版を指定してください(候補: {', '.join(map(str, kids))})",
                     at=cur,
                     candidates=kids,
                 )
@@ -694,7 +696,7 @@ class Repo:
         target = forward(head.at)
         if target is None:
             raise CannotMove(
-                f"版 {head.at} はブランチの先端(子の無い版)なので、これ以上進めません",
+                f"版{head.at}はブランチの先端(子の無い版)なので、これ以上進めません",
                 at=head.at,
             )
         target, skipped = self._skip_broken("redo", target, skip_broken, forward)
@@ -718,8 +720,8 @@ class Repo:
         while cur is not None and not self._is_healthy(cur):
             if not skip_broken:
                 raise BrokenVersion(
-                    f"移動先の版 {cur} は壊れているため移動できません(作業ファイルは変えていません)。"
-                    f"壊れた版を飛ばすには {op} --skip-broken を指定してください",
+                    f"移動先の版{cur}は壊れているため移動できません(作業ファイルは変えていません)。"
+                    f"壊れた版を飛ばすには{op} --skip-broken を指定してください",
                     commit=cur,
                 )
             skipped.append(cur)
@@ -727,7 +729,7 @@ class Repo:
                 cur = step(cur)
             except CannotMove as e:
                 raise BrokenVersion(
-                    f"版 {', '.join(map(str, skipped))} は壊れています。{e}",
+                    f"版 {', '.join(map(str, skipped))}は壊れています。{e}",
                     commit=skipped[0],
                 ) from None
         if cur is None:
@@ -790,10 +792,10 @@ class Repo:
     def _check_movable(self, target: int) -> None:
         # 移動先の版が読めて、tree に不正な値が無いか(マニフェスト・チャンクは restore の事前検査で確かめる)。
         if not self._history.exists(target):
-            raise RevisionError(f"版 {target} は存在しません")
+            raise RevisionError(f"版{target}は存在しません")
         if self._history.is_broken(target):
             raise BrokenVersion(
-                f"版 {target} は壊れているため移動できません", commit=target
+                f"版{target}は壊れているため移動できません", commit=target
             )
 
     def _move(
@@ -871,7 +873,7 @@ class Repo:
                 parent=current.at,
                 tree=import_tree,
                 kind="import",
-                message="sync: bvc.lock から作成",
+                message="sync: bvc.lockから作成",
                 stats={"new_bytes": 0, "total_bytes": self._tree_size(import_tree)},
             )
             created.append(imported.id)
@@ -995,7 +997,7 @@ class Repo:
         # 版の内容(表示用)。読み込み不可の版は None。
         h = self._history
         if not h.exists(commit_id):
-            raise RevisionError(f"版 {commit_id} は存在しません")
+            raise RevisionError(f"版{commit_id}は存在しません")
         return h.get(commit_id) if h.is_readable(commit_id) else None
 
     def note(self, text: str, rev: str = "@") -> Note:
@@ -1010,7 +1012,7 @@ class Repo:
         return note
 
     def branches(self) -> list[BranchInfo]:
-        # ブランチの一覧(M4-2、仕様書 3.7節)。生きている版のあるブランチ、名前の付いたブランチ、現在のブランチ。
+        # ブランチの一覧(M4-2、仕様書 3.7節)。有効な版のあるブランチ、名前の付いたブランチ、現在のブランチ。
         h = self._history
         head = h.head()
         numbers = {c.branch for c in h.living()} | set(h.branch_names()) | {head.branch}
@@ -1044,14 +1046,14 @@ class Repo:
         commit_id = h.resolve(rev, head)
         if not h.is_readable(commit_id):
             raise BvcError(
-                f"版 {commit_id} は読み込めないため、属するブランチが分かりません"
+                f"版{commit_id}は読み込めないため、属するブランチが特定できません"
             )
         branch = h.get(commit_id).branch
         previous = h.name_branch(branch, name)
         if previous is not None:
             tip = h.branch_tip(previous)
             logger.info(
-                "名前 '%s' を別のブランチ(先端 %s)から付け替えました",
+                "名前'%s'を別のブランチ(先端%s)から付け替えました",
                 name,
                 "なし" if tip is None else tip,
             )
@@ -1088,10 +1090,10 @@ class Repo:
         head = h.head()
         commit_id = h.resolve(rev, head)
         if h.is_discarded(commit_id):
-            raise RevisionError(f"版 {commit_id} は削除済みです")
+            raise RevisionError(f"版{commit_id}は削除済みです")
         if commit_id in h.pinned_ids() and not force:
             raise PinnedCommit(
-                f"版 {commit_id} は git のコミットから参照されています。削除するには --force を指定してください",
+                f"版{commit_id}はgitのコミットから参照されています。削除するには--forceを指定してください",
                 commit=commit_id,
             )
         args = {"rev": rev, "id": commit_id, "force": force}
@@ -1107,7 +1109,7 @@ class Repo:
         parent = h.effective_parent(commit_id)
         if parent is None:
             raise CannotMove(
-                f"版 {commit_id} は根(親の無い版)なので、現在位置のまま削除できません。別の版へ移動してから削除してください",
+                f"版{commit_id}は根(親の無い版)なので、現在位置のまま削除できません。別の版へ移動してから削除してください",
                 at=commit_id,
             )
         res = self._move(
@@ -1178,14 +1180,14 @@ class Repo:
         if unknown:
             skipped = ["manifests", "chunks"]
             logger.warning(
-                "版 %s は読み込めない(または不正な記録を含む)ため、参照するデータが分かりません。"
-                "安全のため、マニフェストとチャンクは削除しません(その版を discard すると削除できます)",
+                "版%sは読み込めない(または不正な記録を含む)ため、参照するデータが分かりません。"
+                "安全のため、マニフェストとチャンクは削除しません(その版をdiscardすると削除できます)",
                 ", ".join(map(str, sorted(unknown))),
             )
         elif unreadable:
             skipped = ["chunks"]
             logger.warning(
-                "生きている版が参照するマニフェスト %d 件を読めないため、参照するチャンクが分かりません。"
+                "有効な版が参照するマニフェスト%d件を読めないため、参照するチャンクが分かりません。"
                 "安全のため、チャンクは削除しません",
                 len(unreadable),
             )
@@ -1295,7 +1297,7 @@ class Repo:
         repair: bool = False,
         progress: ProgressFn | None = None,
     ) -> VerifyReport:
-        # 全チャンク・全マニフェストを検証し、生きている版(と pin された版)が復元できるかを調べる。
+        # 全チャンク・全マニフェストを検証し、有効な版(と pin された版)が復元できるかを調べる。
         # 見つけた異常は隔離し、health.json に記録する。repair なら、壊れたチャンク・マニフェストを
         # 作業フォルダのファイルから作り直す。異常が残っていても例外にはせず、report.ok で返す。
         h, s = self._history, self._store
@@ -1460,8 +1462,8 @@ class Repo:
     def _require_git(self) -> Git:
         if self._git is None:
             raise BvcError(
-                "git 連携が無効です(config.json の git.enabled が false)。"
-                '有効にするには config.json に "git": {"enabled": true} を書いてください'
+                "git連携が無効です(config.jsonのgit.enabledがfalse)。"
+                '有効にするにはconfig.jsonに"git": {"enabled": true}を追加してください'
             )
         return self._git
 
@@ -1521,7 +1523,7 @@ class Repo:
             if lh != v.th:
                 if v.raw is not None and (lh is None or lh != v.saved):
                     logger.warning(
-                        "%s が bvc の記録と一致しない状態(非同期状態)でしたが、版 %d の内容で上書きします"
+                        "%sがbvcの記録と一致しない状態(非同期状態)でしたが、版%dの内容で上書きします"
                         "(元の内容は操作ログに記録しました)",
                         lock_file,
                         head.at,
@@ -1548,7 +1550,7 @@ class Repo:
             self.lock_status = "ok"
         except (OSError, CorruptData, UnsafePath) as e:
             logger.warning(
-                "%s を更新できませんでした(%s)。次に bvc を実行したときに更新します",
+                "%sを更新できませんでした(%s)。次にbvcを実行したときに更新します",
                 lock_file,
                 e,
             )
@@ -1581,11 +1583,11 @@ class Repo:
         reason = (
             f"読み込めません({v.err})"
             if v.err is not None
-            else f"現在位置の版 {head.at} と内容が一致しません"
+            else f"現在位置の版{head.at}と内容が一致しません"
         )
         logger.warning(
-            "%s が%s(非同期状態)。git の作業ツリーとバイナリが食い違っている可能性があります。"
-            "bvc sync で合わせてください",
+            "%s が%s(非同期状態)。gitの作業ツリーとバイナリが食い違っている可能性があります。"
+            "bvc syncで合わせてください",
             self.config.git.lock_file,
             reason,
         )
@@ -1616,12 +1618,12 @@ class Repo:
             m = self._store.get_manifest(e.manifest)
             if m.size != e.size or m.sha256 != e.sha256:
                 raise CorruptData(
-                    f"{what} の {path} の記録(サイズ・ハッシュ)が保存データと一致しません(手で編集された可能性があります)",
+                    f"{what}の{path}の記録(サイズ・ハッシュ)が保存データと一致しません(手で編集された可能性があります)",
                     path=path,
                 )
         if missing:
             raise CorruptData(
-                f"{what} が参照するデータがリポジトリにありません(gc 済み、別のリポジトリの bvc.lock など): "
+                f"{what}が参照するデータがリポジトリにありません(gc済み、別のリポジトリのbvc.lockなど): "
                 + ", ".join(missing),
                 missing=missing,
             )
@@ -1641,7 +1643,7 @@ class Repo:
         what = self.config.git.lock_file
         lock = gitlink.read_lock(self._lock_path, what)
         if lock is None:
-            msg = f"{what} がありません(bvc.lock の無いコミットです)。作業ファイルはそのままです"
+            msg = f"{what}がありません(bvc.lockの無いコミットです)。作業ファイルはそのままです"
             if require_lock:
                 raise BvcError(msg)
             logger.warning("%s", msg)
@@ -1652,7 +1654,7 @@ class Repo:
             h.exists(hint) and h.tree_known(hint) and h.get(hint).tree == tree
         ):
             logger.warning(
-                "%s の bvc_commit(版 %d)と内容が一致しません(別のリポジトリで作られた bvc.lock など)。内容を基準にします",
+                "%sのbvc_commit(版%d)と内容が一致しません(別のリポジトリで作られたbvc.lockなど)。内容を基準にします",
                 what,
                 hint,
             )
@@ -1698,18 +1700,18 @@ class Repo:
         )
         if data is None:
             logger.info(
-                "git のコミットに %s が無いため、記録しません",
+                "gitのコミットに%sが無いため、記録しません",
                 self.config.git.lock_file,
             )
             return PinResult(changed=False)
         try:
             lock = gitlink.parse_lock(data, what)
         except (IntegrityError, UnsupportedFormat) as e:
-            logger.warning("%s を読み込めないため、記録しません: %s", what, e)
+            logger.warning("%sを読み込めないため、記録しません: %s", what, e)
             return PinResult(changed=False)
         cid = self._find_by_tree(lock.tree, lock.bvc_commit, include_discarded=True)
         if cid is None:
-            logger.warning("%s と内容が一致する健全な版が無いため、記録しません", what)
+            logger.warning("%sと内容が一致する健全な版が無いため、記録しません", what)
             return PinResult(changed=False)
         existing = next((p for p in h.pins() if p.git == sha and p.bvc == cid), None)
         if existing is not None:
@@ -1729,8 +1731,8 @@ class Repo:
         if cfg.pre_commit == "reject":
             if self.work_state().dirty:
                 raise SafetyAbort(
-                    "未コミットの変更があるため、git commit を中止します。"
-                    "bvc commit で記録してから git commit してください(git.pre_commit=reject)"
+                    "未コミットの変更があるため、git commitを中止します。"
+                    "bvc commitで記録してから git commitしてください(git.pre_commit=reject)"
                 )
         else:
             res = self.commit(
@@ -1747,12 +1749,12 @@ class Repo:
         if staged is None:
             if raw is not None and not staged_blobs:
                 logger.warning(
-                    "%s が git にステージされていません(git add %s)",
+                    "%sがgitにステージされていません(git add %s)",
                     cfg.lock_file,
                     cfg.lock_file,
                 )
             return result
-        what = f"ステージされた {cfg.lock_file}"
+        what = cfg.lock_file
         try:
             lock = gitlink.parse_lock(staged, what)
             self._check_lock_data(lock, what)
@@ -1760,15 +1762,15 @@ class Repo:
                 self._find_by_tree(lock.tree, lock.bvc_commit, include_discarded=True)
                 is None
             ):
-                raise CorruptData(f"{what} と内容が一致する健全な版がありません")
+                raise CorruptData(f"{what}と内容が一致する健全な版がありません")
         except (IntegrityError, UnsupportedFormat) as e:
             raise SafetyAbort(
-                f"git commit を中止します: {e}。bvc sync で合わせるか、正しい {cfg.lock_file} をステージしてください"
+                f"git commitを中止します: {e}。bvc syncで合わせるか、正しい{cfg.lock_file}をステージしてください"
             ) from e
         result.staged_ok = True
         if work is None or work.tree != lock.tree:
             logger.warning(
-                "作業ツリーの %s の変更がステージされていません(git add %s)",
+                "作業ツリーの%sの変更がステージされていません(git add %s)",
                 cfg.lock_file,
                 cfg.lock_file,
             )
@@ -1783,7 +1785,7 @@ class Repo:
         lock, err, raw = self._read_work_lock()
         if raw is None:
             logger.info(
-                "%s が無いコミットです。作業ファイルはそのままです",
+                "%sが無いコミットです。作業ファイルはそのままです",
                 self.config.git.lock_file,
             )
             return PostCheckoutResult(changed=False)
@@ -1816,7 +1818,7 @@ class Repo:
                 out.update(gitlink.parse_lock(data, name).tree.values())
             except (IntegrityError, UnsupportedFormat) as e:
                 raise SafetyAbort(
-                    f"{name} を読み込めないため、参照されるデータが分かりません。安全のため gc を中止します: {e}"
+                    f"{name}を読み込めないため、参照されるデータが特定できません。安全のためgcを中止します: {e}"
                 ) from e
         return out
 

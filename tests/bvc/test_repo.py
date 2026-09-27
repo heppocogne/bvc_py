@@ -1198,7 +1198,7 @@ class TestGc(HistoryOpsTestCase):
         self.assertEqual(list((repo.bvc_dir / "tmp").iterdir()), [])
 
     def test_unknown_tree_keeps_all_data(self):
-        # 生きている版が読めないと、参照するデータが分からないので、マニフェスト・チャンクは消さない(D-15)
+        # 有効な版が読めないと、参照するデータが分からないので、マニフェスト・チャンクは消さない(D-15)
         repo = self.build()
         repo.close()
         helpers.break_json(self.tmp / ".bvc" / "commits" / "3.json")
@@ -1228,7 +1228,7 @@ class TestGc(HistoryOpsTestCase):
         self.assertEqual(sorted(repo._store.iter_chunks()), chunks)
 
     def test_r8_fault_during_gc(self):
-        # 途中で止まっても生きている版はすべて復元でき、もう一度 gc すれば完了する
+        # 途中で止まっても有効な版はすべて復元でき、もう一度 gc すれば完了する
         stages = [
             ("gc:commit", 1),
             ("gc:commit", 2),

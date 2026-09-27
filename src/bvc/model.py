@@ -222,7 +222,7 @@ class BranchInfo:
 
     number: int  # 内部のブランチ番号(表示しない。--json での識別用)
     name: str | None  # 名前(無ければ None)
-    tip: int | None  # 先端の版番号(生きている版が無ければ None)
+    tip: int | None  # 先端の版番号(有効な版が無ければ None)
     fork: (
         int | None
     )  # 分岐元の版番号(このブランチの最初の版の親。根から始まるなら None)
@@ -261,14 +261,14 @@ class GcReport:
 @dataclass(slots=True)
 class VerifyReport:
     # verify の結果。仕様書 3.10節、設計書 4.9節。
-    # 壊れたチャンク・マニフェストは、生きている版(と pin された版)から参照されているものだけを入れる。
+    # 壊れたチャンク・マニフェストは、有効な版(と pin された版)から参照されているものだけを入れる。
 
     changed: bool  # 隔離・健全性の記録・修復で何かを変えたか
     quick: bool
     repair: bool
     checked_chunks: int = 0
     checked_manifests: int = 0
-    checked_commits: int = 0  # 検査した版(生きている版と pin された版)
+    checked_commits: int = 0  # 検査した版(有効な版と pin された版)
     bad_chunks: list[str] = field(
         default_factory=list
     )  # 欠損・破損しているチャンク(修復できなかったもの)

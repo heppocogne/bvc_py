@@ -188,7 +188,7 @@ def test_g2_checkout_restores_binaries(g: GitRepo) -> None:
     g.write("a.bin", V3)  # 未コミットの変更
     cp = g.git("checkout", "-q", "HEAD~1")
     assert g.read("a.bin") == V1
-    assert "版 0 に移動しました" in cp.stdout + cp.stderr
+    assert "版0に移動しました" in cp.stdout + cp.stderr
     assert "上書き" not in cp.stderr and "非同期" not in cp.stderr
     assert (
         g.git("status", "--porcelain", "bvc.lock").stdout == ""
@@ -312,7 +312,7 @@ def test_g4_unreadable_lock_in_history_deletes_nothing(g_nohooks: GitRepo) -> No
     g.git("commit", "-q", "-m", "broken")
     g.git("checkout", "-q", "HEAD~1", "--", "bvc.lock")
     code, _, err = g.bvc("gc")
-    assert code == 3 and "gc を中止" in err
+    assert code == 3 and "gcを中止" in err
     assert (g.root / ".bvc" / "commits" / "0.json").exists()
 
 
@@ -384,7 +384,7 @@ def test_sync_require_lock_and_missing_lock(g_nohooks: GitRepo) -> None:
     g = g_nohooks
     (g.root / "bvc.lock").unlink()
     code, _, err = g.bvc("sync")
-    assert code == 0 and "bvc.lock がありません" in err
+    assert code == 0 and "bvc.lockがありません" in err
     code, out, _ = g.bvc("--json", "sync")
     res = json.loads(out)
     assert (code, res["changed"], res["lock_found"]) == (0, False, False)
@@ -417,7 +417,7 @@ def test_g8_pre_commit_rejects_invalid_staged_lock(g: GitRepo, case: str) -> Non
     g.git("add", "bvc.lock")
     cp = g.git("commit", "-q", "-m", "bad", check=False)
     assert cp.returncode != 0
-    assert "git commit を中止します" in cp.stderr
+    assert "git commitを中止します" in cp.stderr
     assert g.git("rev-parse", "HEAD").stdout == before
 
 

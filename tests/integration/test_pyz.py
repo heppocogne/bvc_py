@@ -116,7 +116,7 @@ def test_basic_scenario(dist, workdir):
     (workdir / "a.bin").write_bytes(b"v1")
     r = run_pyz(pyz, workdir, "commit", "-m", "変更")
     assert (r.returncode, r.stderr) == (0, "")
-    assert "版 1 を作成しました" in r.stdout
+    assert "版1を作成しました" in r.stdout
     assert run_pyz(pyz, workdir, "-q", "undo").returncode == 0
     assert (workdir / "a.bin").read_bytes() == b"v0"
     assert run_pyz(pyz, workdir, "-q", "redo").returncode == 0
