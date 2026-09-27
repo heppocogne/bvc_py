@@ -463,7 +463,8 @@ class TestJsonAllCommands(CliTestCase):
     def test_f11_all_commands(self):
         self.write("a.bin", b"v0")
         data = self.json_cmd("init", "--track", "*.bin")
-        self.assertEqual(set(data), {"changed", "workdir", "commit", "warnings"})
+        self.assertEqual(set(data), {"changed", "workdir", "commit", "hooks", "warnings"})
+        self.assertIsNone(data["hooks"])  # --git なし
         self.assertEqual(data["workdir"], str(self.tmp))
         with Repo.open(self.tmp) as repo:
             self.assertEqual(data["commit"], cli.to_jsonable(repo.get_commit(0)))
@@ -501,7 +502,8 @@ class TestJsonAllCommands(CliTestCase):
 
         self.write("a.bin", b"dirty")
         data = self.json_cmd("log", "--discarded")
-        self.assertEqual(set(data), {"changed", "uncommitted", "entries", "warnings"})
+        self.assertEqual(set(data), {"changed", "uncommitted", "entries", "lock_status", "warnings"})
+        self.assertEqual(data["lock_status"], "disabled")
         with Repo.open(self.tmp) as repo:
             self.assertEqual(data["entries"], cli.to_jsonable(repo.log(include_discarded=True)))
             expected = cli.to_jsonable(repo.work_state())
@@ -563,6 +565,11 @@ class TestExitCodesAllCommands(CliTestCase):
         ("discard",),
         ("gc",),
         ("verify",),
+        ("sync",),
+        ("git", "install-hooks"),
+        ("git", "pin"),
+        ("git", "pre-commit"),
+        ("git", "post-checkout", "a", "b", "1"),
     ]
     INVALID = [
         (),
@@ -578,6 +585,10 @@ class TestExitCodesAllCommands(CliTestCase):
         ("discard", "1", "2"),
         ("gc", "--bogus"),
         ("verify", "--bogus"),
+        ("sync", "--bogus"),
+        ("git",),
+        ("git", "bogus"),
+        ("git", "pin", "x"),
         ("nosuchcommand",),
     ]
 

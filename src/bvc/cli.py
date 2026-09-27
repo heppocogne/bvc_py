@@ -29,9 +29,11 @@ from .model import (
     Commit,
     DiscardResult,
     GcReport,
+    HooksResult,
     LogEntry,
     MoveResult,
     ProgressEvent,
+    SyncResult,
     VerifyReport,
     WorkState,
 )
@@ -385,6 +387,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="<パターン>",
         help="除外パターン(複数指定可)",
     )
+    p.add_argument(
+        "--git", action="store_true", help="git 連携を有効にし、bvc.lock を作ってフックを設置する"
+    )
 
     p = sub.add_parser("commit", help="追跡ファイルの現状を版として記録する")
     p.add_argument("-m", "--message", default="", help="メッセージ")
@@ -442,6 +447,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("verify", help="保存データを検査する(異常が残れば終了コード 1)")
     p.add_argument("--quick", action="store_true", help="チャンクの存在とヘッダだけを確認する")
     p.add_argument("--repair", action="store_true", help="壊れたデータを作業フォルダのファイルから修復する")
+
+    p = sub.add_parser("sync", help="bvc.lock の内容に作業ファイルを合わせる(git 連携)")
+    p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+    p.add_argument(
+        "--require-lock", action="store_true", help="bvc.lock が無ければ終了コード 1 にする"
+    )
+
+    p = sub.add_parser("git", help="git 連携(フックの設置、フック用のコマンド)")
+    gsub = p.add_subparsers(dest="git_command", metavar="<操作>", title="操作")
+    gsub.required = True
+    gsub.add_parser("install-hooks", help="pre-commit / post-commit / post-checkout を設置する")
+    gsub.add_parser("pin", help="(フック用)git の HEAD と bvc の版の対応を記録する")
+    gsub.add_parser("pre-commit", help="(フック用)")
+    gp = gsub.add_parser("post-checkout", help="(フック用)")
+    gp.add_argument("hook_args", nargs="*", metavar="<引数>", help="git が渡す引数(前の HEAD、新しい HEAD、フラグ)")
 
     return parser
 
@@ -544,13 +564,22 @@ def _report_error(
 
 def _cmd_init(args: argparse.Namespace, start: Path) -> int:
     workdir = start / args.path if args.path else start
+    hooks: HooksResult | None = None
     with Repo.init(
-        workdir, track=args.track, ignore=args.ignore, progress=args.progress
+        workdir, track=args.track, ignore=args.ignore, git=args.git, progress=args.progress
     ) as repo:
         entry = repo.log(limit=1)[0]
+        if args.git:
+            # フックの設置に失敗しても init は成功とする(後から install-hooks で設置できる)
+            try:
+                hooks = repo.install_hooks()
+            except BvcError as e:
+                logger.warning("git のフックを設置できませんでした: %s(bvc git install-hooks で設置できます)", e)
     commit = entry.commit
     if args.json:
-        _print_json(args, {"changed": True, "workdir": repo.workdir, "commit": commit})
+        _print_json(
+            args, {"changed": True, "workdir": repo.workdir, "commit": commit, "hooks": hooks}
+        )
         return EXIT_OK
     logger.info(
         "リポジトリを作成しました: %s(版 %d、追跡ファイル %d 件)",
@@ -558,6 +587,14 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
         entry.id,
         len(commit.tree) if commit is not None else 0,
     )
+    if args.git:
+        lock_file = repo.config.git.lock_file
+        logger.info("git 連携を有効にしました。%s を git add してコミットしてください", lock_file)
+        if hooks is not None:
+            _log_hooks(hooks)
+        logger.info("推奨する .gitignore:")
+        for line in [f"/{BVC_DIR}/", *args.track]:
+            logger.info("  %s", line)
     return EXIT_OK
 
 
@@ -604,7 +641,10 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
             logger.warning("未コミットの変更を確認できません: %s", e)
             state = None
     if args.json:
-        _print_json(args, {"changed": False, "uncommitted": state, "entries": entries})
+        _print_json(
+            args,
+            {"changed": False, "uncommitted": state, "entries": entries, "lock_status": repo.lock_status},
+        )
     else:
         _print_text(format_log(entries, state))
     return EXIT_OK
@@ -714,6 +754,85 @@ def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
     return code
 
 
+def _cmd_sync(args: argparse.Namespace, start: Path) -> int:
+    # これから合わせるので、非同期状態の警告は出さない
+    with Repo.open(start, warn_out_of_sync=False) as repo:
+        result = repo.sync(
+            allow_missing=args.allow_missing, require_lock=args.require_lock, progress=args.progress
+        )
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    for line in format_sync(result):
+        logger.info("%s", line)
+    return EXIT_OK
+
+
+def _cmd_git(args: argparse.Namespace, start: Path) -> int:
+    cmd = args.git_command
+    if cmd == "post-checkout":
+        return _git_post_checkout(args, start)
+    with Repo.open(start) as repo:
+        if cmd == "install-hooks":
+            result: Any = repo.install_hooks()
+        elif cmd == "pin":
+            result = repo.git_pin()
+        else:
+            result = repo.git_pre_commit(progress=args.progress)
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    if cmd == "install-hooks":
+        _log_hooks(result)
+    elif cmd == "pin" and result.changed:
+        logger.info("git のコミット %s を版 %d に対応付けました", result.pin.git[:12], result.pin.bvc)
+    elif cmd == "pre-commit" and result.auto_commit is not None:
+        logger.info("bvc: 未コミットの変更を版 %d に自動コミットしました", result.auto_commit.id)
+    return EXIT_OK
+
+
+def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
+    # sync に失敗しても git checkout は取り消せないので、目立つ警告にする(仕様書 5.3節)。
+    # git が渡す引数(前後の HEAD、フラグ)は使わない。ファイル単位の checkout(フラグ 0)でも
+    # bvc.lock が変わり得るので、常に作業ツリーの bvc.lock と現在位置の版の内容を比べて判断する。
+    try:
+        with Repo.open(start, warn_out_of_sync=False) as repo:
+            result = repo.git_post_checkout(progress=args.progress)
+    except BvcError as e:
+        if args.json:
+            raise
+        bar = "=" * 60
+        logger.error(
+            "%s\n%s\nbvc sync に失敗しました。git の作業ツリー(コード)とバイナリが食い違っています"
+            "(非同期状態)。\n原因を解消してから bvc sync を実行してください。\n%s",
+            e,
+            bar,
+            bar,
+            extra={"prefix": "中止" if isinstance(e, SafetyAbort) else None},
+        )
+        return e.exit_code
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    if result.sync is not None:
+        for line in format_sync(result.sync):
+            logger.info("bvc: %s", line)
+    return EXIT_OK
+
+
+def _log_hooks(r: HooksResult) -> None:
+    if r.installed:
+        logger.info("git のフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir)
+    if r.already:
+        logger.info("設置済みのフック: %s", ", ".join(r.already))
+    for name, line in r.manual.items():
+        logger.warning(
+            "既存のフック %s があるため設置していません。下記の処理を追加して下さい:\n  %s",
+            Path(r.hooks_dir) / name,
+            line,
+        )
+
+
 _COMMANDS: Final[dict[str, Any]] = {
     "init": _cmd_init,
     "commit": _cmd_commit,
@@ -726,6 +845,8 @@ _COMMANDS: Final[dict[str, Any]] = {
     "discard": _cmd_discard,
     "gc": _cmd_gc,
     "verify": _cmd_verify,
+    "sync": _cmd_sync,
+    "git": _cmd_git,
 }
 
 
@@ -746,6 +867,17 @@ def format_move(r: MoveResult) -> list[str]:
         lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
     lines += [f"  restored: {p}" for p in r.restored]
     lines += [f"  deleted:  {p}" for p in r.deleted]
+    return lines
+
+
+def format_sync(r: SyncResult) -> list[str]:
+    if not r.lock_found:
+        return []  # 警告は repo 層が出している
+    if not r.changed:
+        return [f"変更なし(bvc.lock は現在位置の版 {r.after.at} と同じ内容です)"]
+    lines = format_move(r)
+    if r.imported is not None:
+        lines.insert(1, f"  bvc.lock の内容から版 {r.imported.id} を作成しました(import)")
     return lines
 
 

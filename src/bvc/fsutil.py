@@ -128,6 +128,7 @@ def is_link_or_reparse(st: os.stat_result) -> bool:
 # ---------------------------------------------------------------------------
 
 _SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+_GIT_SHA_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _ID_STR_RE: Final[re.Pattern[str]] = re.compile(r"0|[1-9][0-9]{0,15}")
 MAX_ID: Final[int] = 10**15
 _INVALID_CHARS: Final[frozenset[str]] = frozenset('<>:"|?*\\')
@@ -142,6 +143,13 @@ def check_sha(s: Any) -> str:
     # 小文字16進64桁のハッシュ値か検査する。不正なら UnsafePath。
     if type(s) is not str or not _SHA_RE.fullmatch(s):
         raise UnsafePath(f"ハッシュ値の形式が不正です: {s!r:.80}")
+    return s
+
+
+def check_git_sha(s: Any) -> str:
+    # git のオブジェクト名(小文字16進の40桁 / 64桁)か検査する。不正なら UnsafePath。
+    if type(s) is not str or not _GIT_SHA_RE.fullmatch(s):
+        raise UnsafePath(f"git のオブジェクト名の形式が不正です: {s!r:.80}")
     return s
 
 

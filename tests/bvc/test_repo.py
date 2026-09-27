@@ -123,6 +123,22 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(parse_config(base).rename_threshold, 0.5)
         self.assertEqual(parse_config({**base, "rename_threshold": 1}).rename_threshold, 1.0)
 
+    def test_git_config(self):
+        # M6: git の設定。bvc.lock が追跡パターンに一致するのは、git 連携が有効なときだけエラー
+        base = {"format": 1, "track": ["*.bin"]}
+        for git in ("x", {"enabled": 1}, {"enabled": True, "lock_file": "../bvc.lock"},
+                    {"enabled": True, "lock_file": ".bvc/x"}, {"enabled": True, "lock_file": ""},
+                    {"enabled": True, "pre_commit": "x"}, {"enabled": True, "lock_file": "a.bin"}):
+            with self.subTest(git=git), self.assertRaises(UsageError):
+                parse_config({**base, "git": git})
+        self.assertFalse(parse_config(base).git.enabled)
+        self.assertEqual(parse_config({"format": 1, "track": ["*"]}).git.lock_file, "bvc.lock")
+        g = parse_config({**base, "git": {"enabled": True, "lock_file": "sub/x.lock", "pre_commit": "reject"}}).git
+        self.assertEqual((g.enabled, g.lock_file, g.pre_commit), (True, "sub/x.lock", "reject"))
+        with self.assertRaises(UsageError):
+            parse_config({"format": 1, "track": ["*"], "git": {"enabled": True}})
+        parse_config({"format": 1, "track": ["*"], "ignore": ["bvc.lock"], "git": {"enabled": True}})
+
 
 class TestCommit(RepoTestCase):
     def test_f12_no_change(self):

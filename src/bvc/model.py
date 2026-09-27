@@ -157,11 +157,28 @@ class MoveResult:
 
 
 @dataclass(slots=True)
+class SyncResult(MoveResult):
+    # sync の結果。仕様書 3.11節。移動しなかった場合も before / after を入れる。
+
+    lock_found: bool = True            # 作業フォルダに bvc.lock があったか
+    imported: Commit | None = None     # bvc.lock の内容から作成した版(kind=import)
+
+
+@dataclass(slots=True)
 class RestoreResult:
     # 作業ファイルの復元(worktree.restore)の結果。設計書 3.6節・4.6節。
 
     written: list[str] = field(default_factory=list)  # 書き出したパス(移動先の内容に置き換えた)
     deleted: list[str] = field(default_factory=list)  # 削除したパス(移動先に無い追跡ファイル)
+
+
+@dataclass(frozen=True, slots=True)
+class GitConfig:
+    # git 連携の設定(config.json の git)。仕様書 4節。
+
+    enabled: bool = False          # bvc.lock を自動更新する
+    lock_file: str = "bvc.lock"    # bvc.lock の場所(作業フォルダからの相対パス)
+    pre_commit: str = "snapshot"   # 未コミットの変更があるときの git commit("snapshot", "reject")
 
 
 @dataclass(slots=True)
@@ -176,6 +193,7 @@ class Config:
     commit_verify: str = "exists"                       # コミット時に再利用する保存データの検査("exists", "full")
     rename_threshold: float = 0.5                       # 名前変更とみなす類似度(仕様書 4節)
     threads: int = 0                                    # ワーカースレッド数(0 = CPU数)
+    git: GitConfig = field(default_factory=GitConfig)   # git 連携
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,3 +254,71 @@ class VerifyReport:
     @property
     def ok(self) -> bool:
         return not self.broken_commits
+
+
+@dataclass(frozen=True, slots=True)
+class LockEntry:
+    # bvc.lock の files の1項目。仕様書 5.1節。
+
+    size: int
+    sha256: str     # ファイル全体の SHA-256
+    manifest: str   # マニフェストの sha256(正本)
+
+
+@dataclass(frozen=True, slots=True)
+class LockFile:
+    # bvc.lock の内容。仕様書 5.1節。
+
+    bvc_commit: int | None          # 書いたときの版番号(参考情報)
+    files: dict[str, LockEntry]     # パス → 内容
+
+    @property
+    def tree(self) -> dict[str, str]:
+        # 版の tree と同じ形(パス → マニフェスト sha256)。
+        return {p: e.manifest for p, e in self.files.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class Pin:
+    # git のコミットと bvc の版の対応(pins.jsonl の1行)。設計書 2.6節。
+
+    git: str        # git のコミット
+    bvc: int        # 版番号
+    tree_hash: str  # 版の tree の tree_hash
+
+
+@dataclass(slots=True)
+class PinResult:
+    # git pin の結果。
+
+    changed: bool
+    pin: Pin | None = None   # 記録した対応(記録しなければ None)
+
+
+@dataclass(slots=True)
+class HooksResult:
+    # git install-hooks の結果。仕様書 3.12節。
+
+    changed: bool
+    hooks_dir: str                                        # フックのフォルダ
+    installed: list[str] = field(default_factory=list)    # 設置したフック
+    already: list[str] = field(default_factory=list)      # bvc のフックが設置済み
+    manual: dict[str, str] = field(default_factory=dict)  # 既存のフック → 追記すべき行
+
+
+@dataclass(slots=True)
+class PreCommitResult:
+    # git pre-commit の結果。仕様書 5.3節。
+
+    changed: bool
+    auto_commit: Commit | None = None  # snapshot で作った自動コミット
+    staged_ok: bool = False            # ステージされた bvc.lock を検査して通ったか(無ければ False)
+
+
+@dataclass(slots=True)
+class PostCheckoutResult:
+    # git post-checkout の結果。仕様書 5.3節。
+
+    changed: bool
+    synced: bool = False                # sync を実行したか
+    sync: SyncResult | None = None

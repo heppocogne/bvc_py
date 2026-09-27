@@ -12,6 +12,7 @@ from .fsutil import (
     append_jsonl,
     atomic_write_json,
     check_id,
+    check_git_sha,
     check_id_str,
     check_relpath,
     check_sha,
@@ -21,7 +22,7 @@ from .fsutil import (
     os_path,
     read_jsonl,
 )
-from .model import Commit, Head, Note
+from .model import Commit, Head, Note, Pin
 
 logger = logging.getLogger(__name__)
 
@@ -693,5 +694,28 @@ class History:
             logger.warning("%s", w)
         return records
 
-    def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> None:
-        raise NotImplementedError("pin は M6 で実装する")
+    def pins(self) -> list[Pin]:
+        # pins.jsonl の記録(古い順)。不正な行は読み飛ばす。
+        out = []
+        for r in self._pins:
+            try:
+                out.append(
+                    Pin(
+                        git=check_git_sha(r.get("git")),
+                        bvc=check_id(r.get("bvc")),
+                        tree_hash=check_sha(r.get("tree_hash")),
+                    )
+                )
+            except UnsafePath:
+                logger.warning("pins.jsonl: 不正な記録を読み飛ばしました")
+        return out
+
+    def pin(self, git_sha: str, bvc_id: int, tree_hash: str) -> Pin:
+        # git のコミットと版の対応を pins.jsonl に追記する(M6-5、設計書 2.6節)。
+        if bvc_id not in self._commits:
+            raise RevisionError(f"版 {bvc_id} は存在しません")
+        pin = Pin(git=check_git_sha(git_sha), bvc=bvc_id, tree_hash=check_sha(tree_hash))
+        record = {"format": 1, "time": now_iso(), "git": pin.git, "bvc": pin.bvc, "tree_hash": pin.tree_hash}
+        append_jsonl(self._bvc_dir / "pins.jsonl", record)
+        self._pins.append(record)
+        return pin

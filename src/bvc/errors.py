@@ -58,6 +58,11 @@ class DiskFull(SafetyAbort):
     pass
 
 
+class GitFailed(SafetyAbort):
+    # git の呼び出しに失敗した(git が無い、git のエラー)。gc などは何も変えずに中止する。
+    pass
+
+
 class CannotMove(BvcError):
     # 要求された移動ができない(根での undo、先端での redo)。データは変わっていない。
     exit_code = 4

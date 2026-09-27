@@ -93,6 +93,7 @@ def test_runs_code_in_archive(dist, workdir):
     r = subprocess.run(
         [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import bvc; print(bvc.__file__)", str(pyz)],
         env=_env(),
+        stdin=subprocess.DEVNULL,  # pytest の標準入力の差し替えで、Windows ではハンドルが無効になるため
         capture_output=True,
         text=True,
     )

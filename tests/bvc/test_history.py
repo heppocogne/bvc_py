@@ -1,4 +1,4 @@
-# history の単体テスト(M2-3〜M2-6, M4-1〜M4-3)。観点: F-2, F-5, F-8, F-14, C-3, C-8, R-1(版の書き込み部分), V-2。
+# history の単体テスト(M2-3〜M2-6, M4-1〜M4-3, M6-5)。観点: F-2, F-5, F-8, F-9(pin), F-14, C-3, C-8, R-1(版の書き込み部分), V-2。
 
 import json
 import unittest
@@ -7,7 +7,7 @@ from typing import Final
 from unittest import mock
 
 from bvc import fsutil
-from bvc.errors import CorruptData, IntegrityError, RevisionError, UnsupportedFormat
+from bvc.errors import CorruptData, IntegrityError, RevisionError, UnsafePath, UnsupportedFormat
 from bvc.history import History, check_branch_name
 from bvc.model import Head
 from tests import helpers
@@ -365,3 +365,29 @@ class TestControlRecovery(HistoryTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPins(HistoryTestCase):
+    # M6-5: pins.jsonl への記録と読み込み
+    def test_pin_is_appended_and_reloaded(self):
+        c = self.commit(None)
+        pin = self.h.pin("b" * 40, c.id, SHA)
+        self.assertEqual((pin.git, pin.bvc, pin.tree_hash), ("b" * 40, c.id, SHA))
+        self.assertEqual(self.h.pinned_ids(), {c.id})
+        h2 = load(self.bvc)
+        self.assertEqual(h2.pins(), [pin])
+        self.assertEqual(h2.pinned_ids(), {c.id})
+
+    def test_pin_rejects_invalid_values(self):
+        c = self.commit(None)
+        for git, cid, th in (("x" * 40, c.id, SHA), ("B" * 40, c.id, SHA), ("b" * 40, 99, SHA),
+                             ("b" * 40, c.id, "x")):
+            with self.subTest(git=git, cid=cid, th=th), self.assertRaises((UnsafePath, RevisionError)):
+                self.h.pin(git, cid, th)
+        self.assertFalse((self.bvc / "pins.jsonl").exists())
+
+    def test_invalid_pin_record_is_skipped(self):
+        c = self.commit(None)
+        fsutil.append_jsonl(self.bvc / "pins.jsonl", {"format": 1, "git": "../x", "bvc": c.id, "tree_hash": SHA})
+        with self.assertLogs("bvc.history", "WARNING"):
+            self.assertEqual(load(self.bvc).pins(), [])
