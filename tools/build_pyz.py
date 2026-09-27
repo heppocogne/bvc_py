@@ -53,7 +53,11 @@ def read_version(pyproject: Path = PROJECT_DIR / "pyproject.toml") -> str:
 
 
 def _ignore(directory: str, names: list[str]) -> list[str]:
-    return [n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))]
+    ignored = [n for n in names if n == "__pycache__" or n.endswith((".pyc", ".pyo"))]
+    # zipapp では root/__main__.py が入口になり bvc/__main__.py は使われないため除外する(I-13)
+    if Path(directory).name == "bvc" and "__main__.py" in names:
+        ignored.append("__main__.py")
+    return ignored
 
 
 def build(output: Path = DEFAULT_OUTPUT) -> tuple[Path, Path]:
