@@ -1,5 +1,5 @@
 # bvc_py
-![](https://github.com/heppocogne/bvc_py/actions/workflows/ci.yaml/badge.svg)
+![](https://github.com/heppocogne/bvc_py/actions/workflows/ci_py.yaml/badge.svg)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Gitleaks](https://img.shields.io/badge/protected%20by-gitleaks-blue)](https://github.com/gitleaks/gitleaks-action)
 
