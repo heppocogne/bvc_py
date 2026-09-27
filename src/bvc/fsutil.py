@@ -16,7 +16,7 @@ import unicodedata
 import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Self
 
 from bvc.errors import CorruptData, Locked, UnsafePath, UnsupportedFormat
 
@@ -460,7 +460,7 @@ class FileLock:
         self._held = False
         remove_quietly(self.path)
 
-    def __enter__(self) -> FileLock:  # noqa: PYI034
+    def __enter__(self) -> Self:
         self.acquire()
         return self
 

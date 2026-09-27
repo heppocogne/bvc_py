@@ -160,7 +160,7 @@ def remove_tree(path: Path) -> None:
         func(p)
 
     if path.exists():
-        # onerror は 3.12 で非推奨だが、3.10 には onexc が無いため使う(I-12)
+        # onerror は 3.12 で非推奨だが、3.11 には onexc が無いため使う(I-12)
         shutil.rmtree(path, onerror=onerror)
 
 

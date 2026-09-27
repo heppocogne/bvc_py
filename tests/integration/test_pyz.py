@@ -70,7 +70,7 @@ def test_archive_contents(dist):
     pyz, cmd = dist
     with zipfile.ZipFile(pyz) as zf:
         names = zf.namelist()
-        # Python 3.10 でも読める圧縮方式だけを使う
+        # Python 3.11 でも読める圧縮方式だけを使う
         assert {i.compress_type for i in zf.infolist()} <= {
             zipfile.ZIP_STORED,
             zipfile.ZIP_DEFLATED,
@@ -84,16 +84,6 @@ def test_archive_contents(dist):
         cmd.read_bytes()
         == b'@echo off\r\npython "%~dp0bvc.pyz" %*\r\nexit /b %ERRORLEVEL%\r\n'
     )
-
-
-def test_read_version_without_tomllib(tmp_path, monkeypatch):
-    # Python 3.10(tomllib なし)でも version を読める
-    (tmp_path / "pyproject.toml").write_text(
-        '[tool.x]\nversion = "9"\n\n[project]\nname = "bvc_py"\nversion = "1.2.3"\n',
-        "utf-8",
-    )
-    monkeypatch.setitem(sys.modules, "tomllib", None)
-    assert build_pyz.read_version(tmp_path / "pyproject.toml") == "1.2.3"
 
 
 def test_runs_code_in_archive(dist, workdir):

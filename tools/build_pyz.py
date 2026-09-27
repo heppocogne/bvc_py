@@ -3,15 +3,14 @@
 # 使い方: python tools/build_pyz.py [出力先の .pyz](省略時は dist/bvc.pyz)
 #
 # - pyproject.toml の version を bvc/__init__.py に書き込む(zipapp では importlib.metadata で取れないため)。
-# - 圧縮は deflate にする(ZIP_ZSTANDARD などは古い Python で読めない)。対象の Python 3.10 以降で動かす。
-# - このスクリプト自体も Python 3.10 で動く(tomllib が無ければ正規表現で version を読む)。
+# - 圧縮は deflate にする(ZIP_ZSTANDARD などは古い Python で読めない)。対象の Python 3.11 以降で動かす。
 # - 出力先と同じフォルダに bvc.cmd(Windows 用。python "%~dp0bvc.pyz" %*)を置く。
 
 from __future__ import annotations
 
-import re
 import shutil
 import sys
+import tomllib
 import zipapp
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -50,15 +49,7 @@ exit /b %ERRORLEVEL%
 
 def read_version(pyproject: Path = PROJECT_DIR / "pyproject.toml") -> str:
     # pyproject.toml の [project] の version を返す。
-    text = pyproject.read_text("utf-8")
-    try:
-        import tomllib  # 3.11 以降
-    except ImportError:
-        m = re.search(r'(?ms)^\[project\]\s*$.*?^version\s*=\s*"([^"]+)"', text)
-        if m is None:
-            raise ValueError(f"version が見つかりません: {pyproject}") from None
-        return m.group(1)
-    return tomllib.loads(text)["project"]["version"]
+    return tomllib.loads(pyproject.read_text("utf-8"))["project"]["version"]
 
 
 def _ignore(directory: str, names: list[str]) -> list[str]:

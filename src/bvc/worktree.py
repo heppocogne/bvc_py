@@ -608,14 +608,11 @@ class Worktree:
         return sorted(out)
 
     def _content_sha256(self, rel: str) -> str | None:
-        h = hashlib.sha256()
         try:
             with open(os_path(self.workdir / rel), "rb") as f:
-                while piece := f.read(1 << 20):
-                    h.update(piece)
+                return hashlib.file_digest(f, "sha256").hexdigest()
         except OSError:
             return None
-        return h.hexdigest()
 
     # --- 修復の候補(verify --repair。設計書 4.9節) ---
 

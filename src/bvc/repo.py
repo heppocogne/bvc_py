@@ -9,7 +9,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, Final, NamedTuple
+from typing import Any, Final, NamedTuple, Self
 
 from . import fsutil, gitlink
 from .chunkers import make_chunker
@@ -545,7 +545,7 @@ class Repo:
         finally:
             self._lock.release()
 
-    def __enter__(self) -> Repo:  # noqa: PYI034
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

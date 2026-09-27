@@ -14,7 +14,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any, BinaryIO, Final
+from typing import Any, BinaryIO, Final, Self
 
 from bvc import fsutil
 from bvc.chunkers import make_chunker
@@ -269,7 +269,7 @@ class ObjectStore:
                 self._executor.shutdown(wait=True)
                 self._executor = None
 
-    def __enter__(self) -> ObjectStore:  # noqa: PYI034
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -10,11 +10,12 @@
   - 03_設計書.md: 内部設計。モジュール構成、`.bvc/` のデータ構造、主要インターフェイス、アルゴリズム、実装順(M1〜M7)
   - 04_テスト観点.md: テスト観点の一覧(F-/P-/C-/R-/S-/G-/V-)
   - 05_実装計画書.md: マイルストーン(M0〜M7)ごとの作業項目・テスト・完了条件、実装前に解消する事項(I-xx)、リスク
+  - 06_実機確認手順書.md: 実際の環境での動作確認方法
 - src/bvc/: ツール本体のスクリプト
 - tests/bvc/: テストコード。単体テストは対象スクリプトの src/ 配下と同じパスに配置し、ファイル名に `test_` を付ける(テスト探索のため)(例: src/bvc/hoge/piyo.py → tests/bvc/hoge/test_piyo.py)。
 
 # 実装時の前提・制約
-- Python 3.10 以降。実行時は**標準ライブラリのみ**(`dependencies = []` を維持する)。開発用の依存は `[project.optional-dependencies] dev` に置く。
+- Python 3.11 以降。実行時は**標準ライブラリのみ**(`dependencies = []` を維持する)。開発用の依存は `[project.optional-dependencies] dev` に置く。
 - 対象 OS は Windows が主。Linux/macOS でも動くこと(パス区切り、大文字小文字、シンボリックリンク/ジャンクションに注意)。
 - エントリポイントは `bvc.main:main`(pyproject.toml)。設計書のモジュール構成(cli, repo, history, worktree, gitlink, store, chunkers, codecs, fsutil, model, errors)は src/bvc/ 直下に置き、依存は上位→下位の一方向のみとする(設計書 1.1節)。
 - repo 層は表示用文字列ではなく dataclass を返し、整形・`--json`・終了コードは cli 層で扱う。
