@@ -1,8 +1,8 @@
 # ファイルの分割方式(chunker)とレジストリ。設計書 3.2節。
-# gear は M7 で追加する。
 
 from __future__ import annotations
 
+import random
 from abc import ABC, abstractmethod
 from typing import Any, BinaryIO, ClassVar, Final, Iterator
 
@@ -88,9 +88,63 @@ class WholeChunker(Chunker):
         yield from _mark_last(_read_limited(f, None))
 
 
+class GearChunker(Chunker):
+    name: ClassVar[str] = "gear"
+
+    def __init__(self, min: int, avg: int, max: int, seed: int) -> None:
+        # min/avg/max はバイト単位。avg は 2 の累乗。seed は int(Rabin fingerprint テーブル生成用)。
+        if not isinstance(avg, int) or avg <= 0 or (avg & (avg - 1)) != 0:
+            raise ValueError(f"gear の avg は 2 の累乗の正の整数にしてください: {avg!r}")
+        if not isinstance(min, int) or not 1 <= min <= avg:
+            raise ValueError(f"gear の min は 1 以上 avg 以下の整数にしてください: {min!r}")
+        if not isinstance(max, int) or not avg <= max:
+            raise ValueError(f"gear の max は avg 以上の整数にしてください: {max!r}")
+        if not isinstance(seed, int):
+            raise ValueError(f"gear の seed は整数にしてください: {seed!r}")
+        self.min = min
+        self.avg = avg
+        self.max = max
+        self.seed = seed
+        # avg から gear_bits を決める(例: avg=4096 → gear_bits=12)
+        self.gear_bits = (avg - 1).bit_length()
+        self.threshold = 1 << self.gear_bits
+        # seed から Rabin fingerprint テーブル生成
+        rng = random.Random(seed)
+        self._table = [rng.randint(0, 0xFFFFFFFF) for _ in range(256)]
+
+    def params(self) -> dict:
+        return {"name": self.name, "min": self.min, "avg": self.avg, "max": self.max, "seed": self.seed}
+
+    def split(self, f: BinaryIO) -> Iterator[tuple[bytes, bool]]:
+        # Rabin fingerprint ベースの rolling hash で CDC。
+        buf = bytearray()
+        fp = 0  # Rabin fingerprint
+        for piece in _read_limited(f, None):
+            for byte_val in piece:
+                # rolling hash: (fp << 8) ^ table[shift-out byte] ^ new byte
+                if buf:
+                    fp = ((fp << 8) ^ self._table[(fp >> 24) & 0xFF]) & 0xFFFFFFFF
+                fp = (fp ^ self._table[byte_val]) & 0xFFFFFFFF
+                buf.append(byte_val)
+                # avg バイト以降、分割ポイントをチェック
+                if len(buf) >= self.avg and (fp & (self.threshold - 1)) == 0:
+                    yield bytes(buf), False
+                    buf.clear()
+                    fp = 0
+                # max に達したら強制分割
+                elif len(buf) >= self.max:
+                    yield bytes(buf), False
+                    buf.clear()
+                    fp = 0
+        # 残り
+        if buf:
+            yield bytes(buf), True
+
+
 CHUNKERS: Final[dict[str, type[Chunker]]] = {
     FixedChunker.name: FixedChunker,
     WholeChunker.name: WholeChunker,
+    GearChunker.name: GearChunker,
 }
 
 

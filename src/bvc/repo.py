@@ -304,12 +304,17 @@ class Repo:
         workdir = fsutil.real_path(workdir)
         if not fsutil.is_dir(workdir):
             raise BvcError(f"作業フォルダがありません: {workdir}")
+        # gear の seed を自動生成(M7-1)
+        ck = chunker or dict(DEFAULT_CHUNKER)
+        if ck.get("name") == "gear" and "seed" not in ck:
+            ck = dict(ck)
+            ck["seed"] = secrets.randbits(64)
         config_data = {
             "format": 1,
             "track": list(track),
             "ignore": list(ignore or []),
             "rules": [],
-            "chunker": chunker or dict(DEFAULT_CHUNKER),
+            "chunker": ck,
             "compression": compression,
             "commit_verify": "exists",
             "rename_threshold": 0.5,
