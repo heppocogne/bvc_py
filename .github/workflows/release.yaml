@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-pyz:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,10 +31,78 @@ jobs:
         run: python tools/build_pyz.py
 
       - name: Check version consistency (tag / pyproject / pyz)
-        run: python .github/scripts/check_version.py "${{ github.ref_name }}"
+        run: python .github/scripts/check_version.py "${{ github.ref_name }}" dist/bvc.pyz
 
       - name: Check stdlib-only runtime deps
         run: python .github/scripts/check_stdlib_only.py
+
+      - name: Upload bvc.pyz artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bvc-pyz
+          path: |
+            dist/bvc.pyz
+            dist/bvc.cmd
+
+  build-exe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: bvc-windows-amd64.exe
+          - os: ubuntu-latest
+            asset_name: bvc-linux-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install patchelf (Nuitka の onefile に要る)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
+      - name: Install package, dev and build dependencies
+        run: pip install -e ".[dev,build]"
+
+      - name: Run nuitka tests
+        run: python -m pytest tests/integration/test_nuitka.py -q --run-slow
+
+      - name: Build executable
+        run: python tools/build_nuitka.py
+
+      - name: Rename executable
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/bvc.exe "dist/${{ matrix.asset_name }}"
+          else
+            mv dist/bvc "dist/${{ matrix.asset_name }}"
+          fi
+
+      - name: Check version consistency (tag / pyproject / 実行ファイル)
+        shell: bash
+        run: python .github/scripts/check_version.py "${{ github.ref_name }}" "dist/${{ matrix.asset_name }}"
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+
+  release:
+    needs: [build-pyz, build-exe]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -42,4 +110,6 @@ jobs:
           files: |
             dist/bvc.pyz
             dist/bvc.cmd
+            dist/bvc-windows-amd64.exe
+            dist/bvc-linux-amd64
           generate_release_notes: true

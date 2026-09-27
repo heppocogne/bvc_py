@@ -1,6 +1,6 @@
 [project]
 name = "bvc_py"
-version = "0.1.0"
+version = "0.1.1"
 description = "バイナリファイル向けバージョン管理システムのPython版(試作)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,17 +10,21 @@ authors = [
 ]
 keywords = ["vcs", "binary", "version-control"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  # "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
+  # "Development Status :: 4 - Beta",
+  # "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: Developers",
-  # "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: MIT License",
   # "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  # "Topic :: System :: Archiving",
+  "Software Development :: Version Control",
+  "Software Development :: Version Control :: Git"
 ]
 # 標準ライブラリのみの予定
 dependencies = []
@@ -30,6 +34,10 @@ dev = [
     "pytest>=9.0.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.16.0",
+]
+# 実行ファイル(dist/bvc.exe など)を作るときだけ要る。実行時依存には含めない(docs/build_nuitka.md)
+build = [
+    "nuitka>=4.0.0",
 ]
 
 [project.urls]
