@@ -1,6 +1,6 @@
 # 配布用の bvc.pyz(zipapp)と bvc.cmd を作る(実装計画書 M5-4、設計書 1.2節)。
 #
-# 使い方: python scripts/build_pyz.py [出力先の .pyz](省略時は dist/bvc.pyz)
+# 使い方: python tools/build_pyz.py [出力先の .pyz](省略時は dist/bvc.pyz)
 #
 # - pyproject.toml の version を bvc/__init__.py に書き込む(zipapp では importlib.metadata で取れないため)。
 # - 圧縮は deflate にする(ZIP_ZSTANDARD などは古い Python で読めない)。対象の Python 3.10 以降で動かす。
@@ -79,9 +79,7 @@ def build(output: Path = DEFAULT_OUTPUT) -> tuple[Path, Path]:
         (root / "__main__.py").write_text(MAIN_TEMPLATE, "utf-8", newline="\n")
         # 一時ファイルに作ってから置き換える(途中で失敗しても前の .pyz を壊さない)
         tmp_pyz = Path(tmp) / output.name
-        zipapp.create_archive(
-            root, tmp_pyz, interpreter=INTERPRETER, compressed=True
-        )
+        zipapp.create_archive(root, tmp_pyz, interpreter=INTERPRETER, compressed=True)
         shutil.move(str(tmp_pyz), str(output))
     cmd = output.with_suffix(".cmd")
     cmd.write_text(CMD_TEMPLATE.format(pyz_name=output.name), "utf-8", newline="\r\n")
@@ -90,7 +88,7 @@ def build(output: Path = DEFAULT_OUTPUT) -> tuple[Path, Path]:
 
 def main(argv: list[str]) -> int:
     if len(argv) > 1:
-        print("使い方: python scripts/build_pyz.py [出力先の .pyz]", file=sys.stderr)
+        print("使い方: python tools/build_pyz.py [出力先の .pyz]", file=sys.stderr)
         return 2
     pyz, cmd = build(Path(argv[0]) if argv else DEFAULT_OUTPUT)
     print(f"バージョン {read_version()} の {pyz} と {cmd} を作成しました")

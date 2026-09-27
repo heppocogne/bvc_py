@@ -1,5 +1,5 @@
 # zipapp(bvc.pyz)と bvc.cmd の結合テスト(実装計画書 M5-4)。観点: F-11, F-12(zipapp からの起動)。
-# scripts/build_pyz.py で一時フォルダに作り、子プロセスとして起動する。
+# tools/build_pyz.py で一時フォルダに作り、子プロセスとして起動する。
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import pytest
 from tests import helpers
 
 ROOT: Final[Path] = Path(__file__).resolve().parents[2]
-BUILD_SCRIPT: Final[Path] = ROOT / "scripts" / "build_pyz.py"
+BUILD_SCRIPT: Final[Path] = ROOT / "tools" / "build_pyz.py"
 
 
 def _load_build_module():
@@ -70,19 +70,26 @@ def test_archive_contents(dist):
     with zipfile.ZipFile(pyz) as zf:
         names = zf.namelist()
         # Python 3.10 でも読める圧縮方式だけを使う
-        assert {i.compress_type for i in zf.infolist()} <= {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+        assert {i.compress_type for i in zf.infolist()} <= {
+            zipfile.ZIP_STORED,
+            zipfile.ZIP_DEFLATED,
+        }
         init = zf.read("bvc/__init__.py").decode("utf-8")
     assert "__main__.py" in names and "bvc/cli.py" in names
     assert not [n for n in names if "__pycache__" in n or n.endswith(".pyc")]
     assert f'__version__ = "{build_pyz.read_version()}"' in init
     assert pyz.read_bytes().startswith(b"#!/usr/bin/env python3\n")
-    assert cmd.read_bytes() == b'@echo off\r\npython "%~dp0bvc.pyz" %*\r\nexit /b %ERRORLEVEL%\r\n'
+    assert (
+        cmd.read_bytes()
+        == b'@echo off\r\npython "%~dp0bvc.pyz" %*\r\nexit /b %ERRORLEVEL%\r\n'
+    )
 
 
 def test_read_version_without_tomllib(tmp_path, monkeypatch):
     # Python 3.10(tomllib なし)でも version を読める
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.x]\nversion = "9"\n\n[project]\nname = "bvc_py"\nversion = "1.2.3"\n', "utf-8"
+        '[tool.x]\nversion = "9"\n\n[project]\nname = "bvc_py"\nversion = "1.2.3"\n',
+        "utf-8",
     )
     monkeypatch.setitem(sys.modules, "tomllib", None)
     assert build_pyz.read_version(tmp_path / "pyproject.toml") == "1.2.3"
@@ -91,7 +98,13 @@ def test_read_version_without_tomllib(tmp_path, monkeypatch):
 def test_runs_code_in_archive(dist, workdir):
     pyz, _ = dist
     r = subprocess.run(
-        [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import bvc; print(bvc.__file__)", str(pyz)],
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); import bvc; print(bvc.__file__)",
+            str(pyz),
+        ],
         env=_env(),
         stdin=subprocess.DEVNULL,  # pytest の標準入力の差し替えで、Windows ではハンドルが無効になるため
         capture_output=True,
@@ -137,8 +150,14 @@ def test_bvc_cmd(dist, workdir):
 
     def run(*args):
         return subprocess.run(
-            [str(cmd), *args], cwd=workdir, env=_env(), stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, encoding="utf-8", timeout=120,
+            [str(cmd), *args],
+            cwd=workdir,
+            env=_env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
         )
 
     r = run("--json", "init", "--track", "a b.bin")

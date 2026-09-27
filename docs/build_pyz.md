@@ -2,7 +2,7 @@
 
 ## 概要
 
-`scripts/build_pyz.py` は、配布用の1ファイル `bvc.pyz`(Python の zipapp)と、Windows 向けの `bvc.cmd` を作る(実装計画書 M5-4、設計書 1.2節)。
+`tools/build_pyz.py` は、配布用の1ファイル `bvc.pyz`(Python の zipapp)と、Windows 向けの `bvc.cmd` を作る(実装計画書 M5-4、設計書 1.2節)。
 `pyproject.toml` の `version` を `bvc/__init__.py` に埋め込むので、実行時に追加のファイルは要らない。
 
 ## 必要な環境
@@ -13,8 +13,8 @@
 ## 使い方
 
 ```
-python scripts/build_pyz.py                       dist/bvc.pyz と dist/bvc.cmd を作る
-python scripts/build_pyz.py path/to/bvc.pyz       出力先を指定する(bvc.cmd も同じフォルダに作る)
+python tools/build_pyz.py                       dist/bvc.pyz と dist/bvc.cmd を作る
+python tools/build_pyz.py path/to/bvc.pyz       出力先を指定する(bvc.cmd も同じフォルダに作る)
 ```
 
 ## 実行
@@ -48,7 +48,7 @@ Linux/macOS では、`chmod +x bvc.pyz` の後に `./bvc.pyz <コマンド>` で
 ## バージョンを上げるとき
 
 1. `pyproject.toml` の `version` を更新する。
-2. `python scripts/build_pyz.py` を実行する。
+2. `python tools/build_pyz.py` を実行する。
 
 ## 確認
 
