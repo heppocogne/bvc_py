@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import sys
 import tomllib
@@ -15,6 +16,12 @@ import zipapp
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Final
+
+# Windows 環境で日本語を出力するため、stdout/stderr を UTF-8 でラップする
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", newline=None)
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", newline=None)
 
 PROJECT_DIR: Final[Path] = Path(__file__).resolve().parent.parent
 SRC_PACKAGE: Final[Path] = PROJECT_DIR / "src" / "bvc"
