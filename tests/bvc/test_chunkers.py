@@ -112,9 +112,8 @@ class TestMakeChunker(unittest.TestCase):
             {"name": "whole", "size": 10},
         ]
         for spec in bad:
-            with self.subTest(spec=spec):
-                with self.assertRaises(ValueError):
-                    chunkers.make_chunker(spec)
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                chunkers.make_chunker(spec)
 
 
 if __name__ == "__main__":

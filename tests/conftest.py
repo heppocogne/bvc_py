@@ -6,10 +6,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Final
 
 import pytest
-
-from typing import Final
 
 ENV_RUN_SLOW: Final[str] = "BVC_RUN_SLOW"
 ENV_LONG_PATH: Final[str] = "BVC_TEST_LONG_PATH"

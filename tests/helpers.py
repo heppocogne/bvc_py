@@ -10,8 +10,9 @@ import random
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable, Final, Iterator, TypeVar
+from typing import Final, TypeVar
 
 ENV_RUN_SLOW: Final[str] = "BVC_RUN_SLOW"
 ENV_LONG_PATH: Final[str] = "BVC_TEST_LONG_PATH"

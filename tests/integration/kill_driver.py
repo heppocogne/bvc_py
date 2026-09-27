@@ -19,9 +19,11 @@ from typing import Final
 ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests import helpers  # noqa: E402,F401  長いパスの設定(BVC_TEST_LONG_PATH)を反映する
-from bvc import fsutil  # noqa: E402
-from bvc.repo import Repo  # noqa: E402
+from bvc import fsutil
+from bvc.repo import Repo
+from tests import (
+    helpers,  # noqa: F401  長いパスの設定(BVC_TEST_LONG_PATH)を反映する
+)
 
 WAIT_SECONDS: Final[int] = 600
 

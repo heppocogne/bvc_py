@@ -7,13 +7,12 @@ import os
 import tracemalloc
 import unittest
 import zlib
-from pathlib import Path
 from typing import Any, Final
 from unittest import mock
 
 from bvc import chunkers, fsutil, store
 from bvc.errors import CorruptData, UnsafePath, UnsupportedFormat
-from bvc.model import ChunkRef, Manifest
+from bvc.model import Manifest
 from bvc.store import Health, ObjectStore
 from tests import helpers
 
@@ -276,14 +275,18 @@ class TestCorruption(StoreTestCase):
                 raise PermissionError("使用中")
                 yield
 
-        with mock.patch.object(store, "get_codec", return_value=Failing()):
-            with self.assertRaises(PermissionError):
-                self.store.get_chunk(self.victim, 1000)
-        with mock.patch.object(
-            fsutil, "read_bytes", side_effect=PermissionError("使用中")
+        with (
+            mock.patch.object(store, "get_codec", return_value=Failing()),
+            self.assertRaises(PermissionError),
         ):
-            with self.assertRaises(PermissionError):
-                self.store.get_manifest(self.msha)
+            self.store.get_chunk(self.victim, 1000)
+        with (
+            mock.patch.object(
+                fsutil, "read_bytes", side_effect=PermissionError("使用中")
+            ),
+            self.assertRaises(PermissionError),
+        ):
+            self.store.get_manifest(self.msha)
         self.assertEqual(self.quarantined(), [])
         self.assertEqual(self.quarantined("manifests"), [])
         self.assertEqual(self.store.health.records("bad_chunks"), {})
@@ -453,9 +456,11 @@ class TestFault(StoreTestCase):
         # R-1(単体): チャンクの書き込み段階で失敗しても、tmp が残らず、やり直せる
         data = helpers.random_bytes(5000, 13)
         hook = helpers.FaultAt("chunk_write", count=3)
-        with mock.patch.object(fsutil, "_fault_hook", hook):
-            with self.assertRaises(OSError):
-                self.put(data)
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(OSError),
+        ):
+            self.put(data)
         self.assertEqual(list((self.repodir / "tmp").iterdir()), [])
         self.assertEqual(list(self.store.iter_manifests()), [])
         sha, _ = self.put(data)
@@ -471,9 +476,11 @@ class TestFault(StoreTestCase):
             names = [c for c in hook.calls if c.startswith("atomic_write:")]
         self.assertEqual(len(names), 1)
         self.setUp()  # 別のリポジトリでやり直す
-        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(names[0])):
-            with self.assertRaises(OSError):
-                self.put(data)
+        with (
+            mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(names[0])),
+            self.assertRaises(OSError),
+        ):
+            self.put(data)
         self.assertEqual(list(self.store.iter_manifests()), [])
         self.assertEqual(list((self.repodir / "tmp").iterdir()), [])
         sha, _ = self.put(data)
@@ -481,9 +488,11 @@ class TestFault(StoreTestCase):
 
     def test_stream_fault(self):
         data = helpers.random_bytes(5000, 15)
-        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("chunk_write")):
-            with self.assertRaises(OSError):
-                self.put(data, WHOLE)
+        with (
+            mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("chunk_write")),
+            self.assertRaises(OSError),
+        ):
+            self.put(data, WHOLE)
         self.assertEqual(list((self.repodir / "tmp").iterdir()), [])
         self.assertEqual(self.chunk_files(), [])
 

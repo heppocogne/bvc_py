@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import sys
 import tempfile
 import time
@@ -99,7 +97,7 @@ def measure_combination(
         results["final_size"] = sizes[-1] if sizes else 0
         results["total_data_size"] = sum(data_sizes)
         results["error"] = None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         results["error"] = str(e)
 
     return results

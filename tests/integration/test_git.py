@@ -48,6 +48,7 @@ class GitRepo:
             capture_output=True,
             encoding="utf-8",
             errors="replace",
+            check=False,
         )
         if check and cp.returncode != 0:
             raise AssertionError(

@@ -287,7 +287,7 @@ class TestNewCommitWriteOrder(HistoryTestCase):
     def test_log_op_appends(self):
         self.h.log_op({"op": "commit", "result": "ok"})
         self.h.log_op({"op": "commit", "result": "ok"})
-        records, warns = fsutil.read_jsonl(self.bvc / "oplog.jsonl", "oplog")
+        records, _warns = fsutil.read_jsonl(self.bvc / "oplog.jsonl", "oplog")
         self.assertEqual([r["op"] for r in records], ["commit", "commit"])
         self.assertTrue(all("time" in r for r in records))
 

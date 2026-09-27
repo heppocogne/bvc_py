@@ -12,8 +12,9 @@ import json
 import os
 import threading
 import uuid
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Final, Iterable, Iterator
+from typing import Any, BinaryIO, Final
 
 from bvc import fsutil
 from bvc.chunkers import make_chunker
@@ -268,7 +269,7 @@ class ObjectStore:
                 self._executor.shutdown(wait=True)
                 self._executor = None
 
-    def __enter__(self) -> ObjectStore:
+    def __enter__(self) -> ObjectStore:  # noqa: PYI034
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -425,8 +426,7 @@ class ObjectStore:
         tmp = fsutil.new_tmp_path(self.tmpdir)
         try:
             with open(fsutil.os_path(tmp), "wb") as f:
-                for p in parts:
-                    f.write(p)
+                f.writelines(parts)
                 f.flush()
                 os.fsync(f.fileno())
         except BaseException:
@@ -464,7 +464,7 @@ class ObjectStore:
         if self.health.is_bad("bad_chunks", sha):
             raise CorruptData(f"チャンクは壊れているため隔離済みです: {sha}", sha=sha)
         try:
-            f = open(fsutil.os_path(path), "rb")
+            f = open(fsutil.os_path(path), "rb")  # noqa: SIM115
         except FileNotFoundError:
             self.quarantine("chunk", sha, "missing")
             raise CorruptData(

@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import zlib
 from abc import ABC, abstractmethod
-from typing import ClassVar, Final, Iterable, Iterator
+from collections.abc import Iterable, Iterator
+from typing import ClassVar, Final
 
 from bvc.errors import CorruptData, UnsupportedFormat
 

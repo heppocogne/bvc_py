@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Final, Iterable
+from typing import Any, Final
 
 from .errors import CorruptData, IntegrityError, RevisionError, UnsafePath
 from .fsutil import (
     append_jsonl,
     atomic_write_json,
-    check_id,
     check_git_sha,
+    check_id,
     check_id_str,
     check_relpath,
     check_sha,
@@ -69,7 +71,7 @@ def _parse_commit(data: dict, file_id: int) -> tuple[Commit, bool]:
         parent >= commit_id or not ancestors or ancestors[0] != parent
     ):
         raise CorruptData(f"版 {file_id}: 親の記録が不正です")
-    if any(b >= a for a, b in zip(ancestors, ancestors[1:])) or any(
+    if any(b >= a for a, b in itertools.pairwise(ancestors)) or any(
         a >= commit_id for a in ancestors
     ):
         raise CorruptData(f"版 {file_id}: 祖先の記録が不正です")

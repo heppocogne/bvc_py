@@ -62,6 +62,7 @@ def run_pyz(pyz: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         encoding="utf-8",
         timeout=120,
+        check=False,
     )
 
 
@@ -109,6 +110,7 @@ def test_runs_code_in_archive(dist, workdir):
         stdin=subprocess.DEVNULL,  # pytest の標準入力の差し替えで、Windows ではハンドルが無効になるため
         capture_output=True,
         text=True,
+        check=False,
     )
     assert Path(r.stdout.strip()).parent.parent == pyz
     r = run_pyz(pyz, workdir, "--version")
@@ -158,6 +160,7 @@ def test_bvc_cmd(dist, workdir):
             text=True,
             encoding="utf-8",
             timeout=120,
+            check=False,
         )
 
     r = run("--json", "init", "--track", "a b.bin")

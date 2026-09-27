@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import random
 from abc import ABC, abstractmethod
-from typing import Any, BinaryIO, ClassVar, Final, Iterator
+from collections.abc import Iterator
+from typing import Any, BinaryIO, ClassVar, Final
 
 # 読み込み単位(split が返す断片の最大サイズ)
 READ_SIZE: Final[int] = 16 << 20
@@ -106,7 +107,7 @@ class GearChunker(Chunker):
         if not isinstance(max, int) or not avg <= max:
             raise ValueError(f"gear の max は avg 以上の整数にしてください: {max!r}")
         if not isinstance(seed, int):
-            raise ValueError(f"gear の seed は整数にしてください: {seed!r}")
+            raise ValueError(f"gear の seed は整数にしてください: {seed!r}")  # noqa: TRY004
         self.min = min
         self.avg = avg
         self.max = max
@@ -139,12 +140,11 @@ class GearChunker(Chunker):
                 fp = (fp ^ self._table[byte_val]) & 0xFFFFFFFF
                 buf.append(byte_val)
                 # avg バイト以降、分割ポイントをチェック
-                if len(buf) >= self.avg and (fp & (self.threshold - 1)) == 0:
-                    yield bytes(buf), False
-                    buf.clear()
-                    fp = 0
-                # max に達したら強制分割
-                elif len(buf) >= self.max:
+                if (
+                    len(buf) >= self.avg
+                    and (fp & (self.threshold - 1)) == 0
+                    or len(buf) >= self.max
+                ):
                     yield bytes(buf), False
                     buf.clear()
                     fp = 0

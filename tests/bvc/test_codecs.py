@@ -72,9 +72,8 @@ class TestCodecs(unittest.TestCase):
             "empty": b"",
         }
         for name, data in cases.items():
-            with self.subTest(name):
-                with self.assertRaises(CorruptData):
-                    z.decode(data, 10_000)
+            with self.subTest(name), self.assertRaises(CorruptData):
+                z.decode(data, 10_000)
 
     def test_zlib_bomb(self):
         # C-9: 展開すると巨大になるデータでも、上限を少し超えた時点で止まり、メモリを使い果たさない

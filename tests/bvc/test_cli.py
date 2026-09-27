@@ -296,7 +296,7 @@ class TestHistoryCommands(CliTestCase):
             self.bvc("commit", "-m", f"c{i}")
 
     def notes(self):
-        code, out, _ = self.bvc("--json", "log", "--discarded")
+        _code, out, _ = self.bvc("--json", "log", "--discarded")
         return {
             e["id"]: [n["text"] for n in e["notes"]] for e in json.loads(out)["entries"]
         }
@@ -598,7 +598,7 @@ class TestJsonAllCommands(CliTestCase):
 class TestExitCodesAllCommands(CliTestCase):
     # F-12: 全コマンドの終了コード(仕様書 2.2節)。4 は TestMove・TestHistoryCommands などで確認している。
 
-    VALID = [
+    VALID = [  # noqa: RUF012
         ("commit",),
         ("log",),
         ("undo",),
@@ -617,7 +617,7 @@ class TestExitCodesAllCommands(CliTestCase):
         ("git", "pre-commit"),
         ("git", "post-checkout", "a", "b", "1"),
     ]
-    INVALID = [
+    INVALID = [  # noqa: RUF012
         (),
         ("init",),
         ("commit", "--bogus"),

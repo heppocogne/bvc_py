@@ -17,8 +17,8 @@ import time
 import traceback
 import unicodedata
 from datetime import datetime
-from functools import lru_cache
-from pathlib import PurePath, Path
+from functools import cache
+from pathlib import Path, PurePath
 from typing import Any, ClassVar, Final, TextIO
 
 from . import __version__
@@ -146,7 +146,7 @@ _SYMBOL_FALLBACKS: Final[dict[str, tuple[str, ...]]] = {
 }
 
 
-@lru_cache(maxsize=None)
+@cache
 def _symbol_table(encoding: str) -> dict[int, str]:
     # encoding で表せない記号 → 代わりの文字列(str.translate 用)。
     table: dict[int, str] = {}
@@ -301,7 +301,7 @@ def to_jsonable(obj: Any) -> Any:
     return str(obj)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _public_properties(cls: type) -> tuple[str, ...]:
     names = []
     for klass in reversed(cls.__mro__):
@@ -584,7 +584,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.json:
             traceback.print_exc(file=sys.stderr)
         else:
-            logger.error("予期しないエラー: %s", e, exc_info=True)
+            logger.exception("予期しないエラー: %s", e)  # noqa: TRY401
         return _report_error(args, e, EXIT_ERROR, f"予期しないエラー: {e}", logged=True)
     finally:
         if view is not None:
@@ -1048,8 +1048,10 @@ def format_gc(r: GcReport) -> str:
 def format_verify(r: VerifyReport) -> list[str]:
     # 最後の行が結果(異常が残っていれば、壊れた版の一覧)。
     lines = [
-        f"検査しました{'(--quick)' if r.quick else ''}: チャンク {r.checked_chunks}、"
-        f"マニフェスト {r.checked_manifests}、版 {r.checked_commits}"
+        (
+            f"検査しました{'(--quick)' if r.quick else ''}: チャンク {r.checked_chunks}、"
+            f"マニフェスト {r.checked_manifests}、版 {r.checked_commits}"
+        )
     ]
     if r.repaired_chunks or r.repaired_manifests:
         lines.append(

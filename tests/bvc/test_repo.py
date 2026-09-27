@@ -270,9 +270,8 @@ class TestOpenAndLock(RepoTestCase):
         self.write("a", b"1")
         self.init().close()
         (self.tmp / "a").unlink()
-        with self.assertRaises(MissingFiles):
-            with Repo.open(self.tmp) as repo:
-                repo.commit()
+        with self.assertRaises(MissingFiles), Repo.open(self.tmp) as repo:
+            repo.commit()
         self.assertFalse((self.tmp / ".bvc" / "lock").exists())
 
 
@@ -292,7 +291,7 @@ class _PrefixFault:
 
 class TestCommitFaults(RepoTestCase):
     # R-1: commit の各書き込み段階で例外を起こしても、その後の commit・log が正常に動く
-    STAGES = [
+    STAGES = [  # noqa: RUF012
         "chunk_write",
         r"atomic_write:[0-9a-f]{64}\.json",
         "atomic_write:counters.json",
@@ -313,7 +312,7 @@ class TestCommitFaults(RepoTestCase):
                 hook = _PrefixFault(stage)
                 with (
                     mock.patch.object(fsutil, "_fault_hook", hook),
-                    self.assertRaises(Exception),
+                    self.assertRaises(Exception),  # noqa: B017
                 ):
                     repo.commit("first")
                 self.assertEqual(hook.seen, 1, "段階が呼ばれていない")
@@ -1704,7 +1703,7 @@ class TestSkipBroken(CorruptionTestCase):
         self.assertEqual(self.files(), {"a.bin": b"v3"})
         self.assertEqual(self.quarantined(repo), [victim.name])
         # 隔離の記録があるので、次は事前検査で分かり、飛ばせる
-        self.assertTrue([e.broken for e in repo.log() if e.id == 2][0])
+        self.assertTrue(next(e.broken for e in repo.log() if e.id == 2))
         self.assertEqual(repo.undo(skip_broken=True).skipped, [2])
         self.assertEqual(self.files(), {"a.bin": b"v1"})
 
@@ -1771,7 +1770,7 @@ class TestVerify(CorruptionTestCase):
         r = repo.verify()
         self.assertEqual((r.broken_commits, r.bad_chunks), ([1], [victim.name]))
         self.assertEqual(self.quarantined(repo), [victim.name])
-        self.assertTrue([e.broken for e in repo.log() if e.id == 1][0])
+        self.assertTrue(next(e.broken for e in repo.log() if e.id == 1))
         # 隔離したものは重複排除で再利用せず、同じ内容を commit すると保存し直す
         self.write("a.bin", b"v1")
         repo.commit()
@@ -1784,7 +1783,7 @@ class TestVerify(CorruptionTestCase):
         self.chunk_of(repo, 1).unlink()
         r = repo.verify(quick=True)
         self.assertEqual((r.ok, r.broken_commits), (False, [1]))
-        self.assertTrue([e.broken for e in repo.log() if e.id == 1][0])
+        self.assertTrue(next(e.broken for e in repo.log() if e.id == 1))
 
     def test_c6_repair_from_tracked_file(self):
         repo = self.build_linear(2)
@@ -1859,7 +1858,7 @@ class TestVerify(CorruptionTestCase):
 class TestRecoverControl(MoveTestCase):
     # M4-10: 管理ファイルの自動復旧(C-7、設計書 4.12節)。
 
-    BREAKS = {
+    BREAKS = {  # noqa: RUF012
         "delete": lambda p: p.unlink(),
         "empty": lambda p: p.write_bytes(b""),
         "json": helpers.break_json,

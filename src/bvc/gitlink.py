@@ -12,8 +12,9 @@ import stat
 import subprocess
 import sys
 import zipimport
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, Mapping
+from typing import Final
 
 from . import fsutil
 from .errors import CorruptData, GitFailed, UnsafePath
@@ -175,6 +176,7 @@ class Git:
                 input=input,
                 stdin=None if input is not None else subprocess.DEVNULL,
                 capture_output=True,
+                check=False,
             )
         except OSError as e:
             raise GitFailed(

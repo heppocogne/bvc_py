@@ -10,8 +10,9 @@ import shutil
 import stat
 import time
 import unicodedata
+from collections.abc import Callable, Collection
 from pathlib import Path
-from typing import Any, Callable, Collection, Final
+from typing import Any, Final
 
 from .errors import (
     BrokenVersion,
@@ -183,7 +184,7 @@ class Worktree:
     def _matches_quietly(self, raw: str) -> bool:
         try:
             return self.is_tracked(raw.replace("\\", "/"))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     def _rule_for(self, rel: str) -> tuple[dict, str | None]:
@@ -297,7 +298,7 @@ class Worktree:
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 st1 = os.stat(p)
-                f = open(p, "rb")
+                f = open(p, "rb")  # noqa: SIM115
             except FileNotFoundError as e:
                 raise FileChanging(
                     f"読み取り中にファイルが消えました: {rel}", path=rel
@@ -833,7 +834,7 @@ class Worktree:
             try:
                 self._rollback(ops)
                 self._abandon(journal)
-            except BaseException as e2:
+            except BaseException as e2:  # noqa: BLE001
                 raise FileBusy(
                     f"復元に失敗し、元に戻す処理も完了できませんでした({e2})。"
                     "次に bvc を実行したときに、もう一度元に戻します",
@@ -1064,14 +1065,14 @@ class Worktree:
                 raise ValueError("fs_time_ns")
             target = data["target"]
             if not isinstance(target, dict):
-                raise ValueError("target")
+                raise ValueError("target")  # noqa: TRY004
             for rel, sha in target.items():
                 if check_relpath(rel) != rel:
                     raise ValueError("target")
                 check_sha(sha)
             raw_ops = data["ops"]
             if not isinstance(raw_ops, list):
-                raise ValueError("ops")
+                raise ValueError("ops")  # noqa: TRY004
             ops = [
                 _Op.from_json(o, i, data["state"] != "staging")
                 for i, o in enumerate(raw_ops)
@@ -1142,7 +1143,7 @@ class _Op:
     # src は退避する現在のファイルの実際の名前(無ければ None)、expect はその state 時点の
     # (size, mtime_ns)、staged は txn/new/<n> に展開した内容の (size, mtime_ns)。
 
-    __slots__ = ("n", "kind", "path", "src", "sha", "expect", "staged")
+    __slots__ = ("expect", "kind", "n", "path", "sha", "src", "staged")
 
     def __init__(
         self,

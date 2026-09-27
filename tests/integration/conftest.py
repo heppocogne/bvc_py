@@ -6,8 +6,9 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Final
+from typing import Final
 
 import pytest
 

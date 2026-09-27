@@ -31,7 +31,7 @@ class TestHelpers(helpers.TempDirTestCase):
             with open(prefixed + "\\f.bin", "wb") as f:
                 f.write(b"x")
             with self.assertRaises(FileNotFoundError):
-                open(long_dir / "f.bin", "rb")
+                open(long_dir / "f.bin", "rb")  # noqa: SIM115
             with self.assertRaises(FileNotFoundError):
                 os.listdir(long_dir)
             self.assertEqual(os.listdir(self.tmp), ["d" * 60])  # 短いパスはそのまま
@@ -69,9 +69,11 @@ class TestHelpers(helpers.TempDirTestCase):
             calls.append(1)
 
         self.assertTrue(f._bvc_slow)
-        with mock.patch.dict(os.environ, {helpers.ENV_RUN_SLOW: ""}):
-            with self.assertRaises(unittest.SkipTest):
-                f()
+        with (
+            mock.patch.dict(os.environ, {helpers.ENV_RUN_SLOW: ""}),
+            self.assertRaises(unittest.SkipTest),
+        ):
+            f()
         with mock.patch.dict(os.environ, {helpers.ENV_RUN_SLOW: "1"}):
             f()
         self.assertEqual(calls, [1])

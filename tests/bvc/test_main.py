@@ -45,11 +45,15 @@ class TestMain(unittest.TestCase):
             [sys.executable, "-m", "bvc", "--help"],
             stdin=subprocess.DEVNULL,
             capture_output=True,
+            check=False,
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(b"usage: bvc", r.stdout)
         r = subprocess.run(
-            [sys.executable, "-m", "bvc"], stdin=subprocess.DEVNULL, capture_output=True
+            [sys.executable, "-m", "bvc"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
         )
         self.assertEqual(r.returncode, cli.EXIT_USAGE)
 

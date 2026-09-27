@@ -5,7 +5,6 @@ import os
 import time
 import unicodedata
 import unittest
-from pathlib import Path
 from typing import Final
 from unittest import mock
 
@@ -280,9 +279,11 @@ class TestBusyFiles(WorktreeTestCase):
                 return open(path, *a, **k)
             raise PermissionError("使用中")
 
-        with mock.patch("bvc.worktree.open", busy_open, create=True):
-            with self.assertRaises(FileBusy):
-                self.wt.state({}, store_chunks=False)
+        with (
+            mock.patch("bvc.worktree.open", busy_open, create=True),
+            self.assertRaises(FileBusy),
+        ):
+            self.wt.state({}, store_chunks=False)
 
 
 class _nullcontext:

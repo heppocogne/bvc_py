@@ -27,9 +27,11 @@ class TestAtomicWrite(helpers.TempDirTestCase):
         # 置き換えの直前に障害が起きても、元のファイルが残り、tmp も残らない
         fsutil.atomic_write(self.path, b"original", self.tmpdir)
         hook = helpers.FaultAt("atomic_write:HEAD.json")
-        with mock.patch.object(fsutil, "_fault_hook", hook):
-            with self.assertRaises(OSError):
-                fsutil.atomic_write(self.path, b"new", self.tmpdir)
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(OSError),
+        ):
+            fsutil.atomic_write(self.path, b"new", self.tmpdir)
         self.assertEqual(hook.calls, ["atomic_write:HEAD.json"])
         self.assertEqual(self.path.read_bytes(), b"original")
         self.assertEqual(list(self.tmpdir.iterdir()), [])
@@ -65,11 +67,13 @@ class TestAtomicWrite(helpers.TempDirTestCase):
         # D-15: 読めない(使用中など)ことを破損と誤認して、自動復旧に進ませない
         self.path.parent.mkdir(parents=True)
         self.path.write_bytes(b'{"format":1}')
-        with mock.patch.object(
-            fsutil, "read_bytes", side_effect=PermissionError("busy")
+        with (
+            mock.patch.object(
+                fsutil, "read_bytes", side_effect=PermissionError("busy")
+            ),
+            self.assertRaises(PermissionError),
         ):
-            with self.assertRaises(PermissionError):
-                fsutil.load_json(self.path, "x")
+            fsutil.load_json(self.path, "x")
 
     def test_load_json_is_a_directory(self):
         # 中身の読めないもの(フォルダ)も、CorruptData ではなく OSError
@@ -143,9 +147,11 @@ class TestJsonl(helpers.TempDirTestCase):
 
     def test_fault_before_append(self):
         hook = helpers.FaultAt("append_jsonl:oplog.jsonl")
-        with mock.patch.object(fsutil, "_fault_hook", hook):
-            with self.assertRaises(OSError):
-                fsutil.append_jsonl(self.path, {"format": 1})
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(OSError),
+        ):
+            fsutil.append_jsonl(self.path, {"format": 1})
         self.assertFalse(self.path.exists())
 
 
@@ -202,26 +208,23 @@ class TestChecks(unittest.TestCase):
             b"a" * 64,
         ]
         for s in bad:
-            with self.subTest(s=s):
-                with self.assertRaises(UnsafePath):
-                    fsutil.check_sha(s)
+            with self.subTest(s=s), self.assertRaises(UnsafePath):
+                fsutil.check_sha(s)
 
     def test_check_id(self):
         # P-2: 負数、巨大な数、文字列、小数
         for n in (0, 1, 10**15):
             self.assertEqual(fsutil.check_id(n), n)
         for n in (-1, 10**15 + 1, 10**100, "1", 1.0, True, None):
-            with self.subTest(n=n):
-                with self.assertRaises(UnsafePath):
-                    fsutil.check_id(n)
+            with self.subTest(n=n), self.assertRaises(UnsafePath):
+                fsutil.check_id(n)
 
     def test_check_id_str(self):
         self.assertEqual(fsutil.check_id_str("0"), 0)
         self.assertEqual(fsutil.check_id_str("42"), 42)
         for s in ("", "-1", "01", "1.0", " 1", "1\n", "\u0661", "1" * 17, 1):
-            with self.subTest(s=s):
-                with self.assertRaises(UnsafePath):
-                    fsutil.check_id_str(s)
+            with self.subTest(s=s), self.assertRaises(UnsafePath):
+                fsutil.check_id_str(s)
 
     def test_check_relpath_ok(self):
         for p in (
@@ -288,9 +291,8 @@ class TestChecks(unittest.TestCase):
             b"a",
         ]
         for p in bad:
-            with self.subTest(p=p):
-                with self.assertRaises(UnsafePath):
-                    fsutil.check_relpath(p)
+            with self.subTest(p=p), self.assertRaises(UnsafePath):
+                fsutil.check_relpath(p)
 
 
 class TestResolveInWorkdir(helpers.TempDirTestCase):
@@ -463,9 +465,11 @@ class TestFaultHook(unittest.TestCase):
 
     def test_replace_stage(self):
         hook = helpers.FaultAt("replace:swap:3")
-        with mock.patch.object(fsutil, "_fault_hook", hook):
-            with self.assertRaises(OSError):
-                fsutil.replace("nonexistent-a", "nonexistent-b", "swap:3")
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(OSError),
+        ):
+            fsutil.replace("nonexistent-a", "nonexistent-b", "swap:3")
         self.assertEqual(hook.calls, ["replace:swap:3"])
 
 
