@@ -19,11 +19,15 @@ SHA_B: Final[str] = "b" * 64
 
 
 def manifest(size: int, sha: str) -> Manifest:
-    return Manifest(size=size, sha256=sha, chunker={"name": "whole"}, chunks=(ChunkRef(sha, size),))
+    return Manifest(
+        size=size, sha256=sha, chunker={"name": "whole"}, chunks=(ChunkRef(sha, size),)
+    )
 
 
 def lock_obj(files: dict, **kw) -> bytes:
-    return json.dumps({"format": 1, "bvc_commit": 3, "files": files, **kw}).encode("utf-8")
+    return json.dumps({"format": 1, "bvc_commit": 3, "files": files, **kw}).encode(
+        "utf-8"
+    )
 
 
 def entry(sha: str = SHA_A, size: int = 1) -> dict:
@@ -36,7 +40,9 @@ class TestLockFormat(unittest.TestCase):
         ms = {SHA_A: manifest(1, SHA_B), SHA_B: manifest(2, SHA_A)}
         data = gitlink.lock_bytes(5, tree, ms)
         self.assertTrue(data.endswith(b"}\n"))
-        self.assertEqual(data, gitlink.lock_bytes(5, dict(reversed(list(tree.items()))), ms))
+        self.assertEqual(
+            data, gitlink.lock_bytes(5, dict(reversed(list(tree.items()))), ms)
+        )
         text = data.decode("utf-8")
         self.assertLess(text.index('"a.bin"'), text.index('"b/y.bin"'))
         self.assertLess(text.index('"bvc_commit"'), text.index('"files"'))
@@ -49,12 +55,19 @@ class TestLockFormat(unittest.TestCase):
         self.assertEqual(lock.files["a.bin"].sha256, SHA_B)
 
     def test_tree_hash(self):
-        self.assertEqual(gitlink.tree_hash({"a": SHA_A, "b": SHA_B}), gitlink.tree_hash({"b": SHA_B, "a": SHA_A}))
-        self.assertNotEqual(gitlink.tree_hash({"a": SHA_A}), gitlink.tree_hash({"a": SHA_B}))
+        self.assertEqual(
+            gitlink.tree_hash({"a": SHA_A, "b": SHA_B}),
+            gitlink.tree_hash({"b": SHA_B, "a": SHA_A}),
+        )
+        self.assertNotEqual(
+            gitlink.tree_hash({"a": SHA_A}), gitlink.tree_hash({"a": SHA_B})
+        )
         self.assertRegex(gitlink.tree_hash({}), "^[0-9a-f]{64}$")
 
     def test_parse_accepts_missing_commit_and_bom(self):
-        lock = gitlink.parse_lock(b"\xef\xbb\xbf" + json.dumps({"format": 1, "files": {}}).encode())
+        lock = gitlink.parse_lock(
+            b"\xef\xbb\xbf" + json.dumps({"format": 1, "files": {}}).encode()
+        )
         self.assertEqual(lock, LockFile(bvc_commit=None, files={}))
 
     def test_v2_unknown_format(self):
@@ -62,20 +75,41 @@ class TestLockFormat(unittest.TestCase):
             gitlink.parse_lock(json.dumps({"format": 2, "files": {}}).encode())
 
     def test_corrupt_values(self):
-        for data in (b"", b"{", b"[]", json.dumps({"files": {}}).encode(),
-                     json.dumps({"format": 1}).encode(),
-                     lock_obj({}, bvc_commit=-1), lock_obj({}, bvc_commit="3"),
-                     lock_obj({"a": entry(size=-1)}), lock_obj({"a": entry(size=True)}),
-                     lock_obj({"a": {**entry(), "sha256": "x"}}), lock_obj({"a": {**entry(), "manifest": None}}),
-                     lock_obj({"a": "x"}), b"\xff\xfe"):
+        for data in (
+            b"",
+            b"{",
+            b"[]",
+            json.dumps({"files": {}}).encode(),
+            json.dumps({"format": 1}).encode(),
+            lock_obj({}, bvc_commit=-1),
+            lock_obj({}, bvc_commit="3"),
+            lock_obj({"a": entry(size=-1)}),
+            lock_obj({"a": entry(size=True)}),
+            lock_obj({"a": {**entry(), "sha256": "x"}}),
+            lock_obj({"a": {**entry(), "manifest": None}}),
+            lock_obj({"a": "x"}),
+            b"\xff\xfe",
+        ):
             with self.subTest(data=data), self.assertRaises(CorruptData):
                 gitlink.parse_lock(data)
 
     def test_p1_unsafe_paths(self):
         # P-1: 作業フォルダの外・.bvc の中・予約名・正規化されていない名前などは UnsafePath
         nfd = unicodedata.normalize("NFD", "が.bin")
-        for path in ("../x", "/x", "C:/x", "C:\\x", "\\\\server\\x", ".bvc/config.json", "CON",
-                     "a/./b", "a//b", "a\x01", nfd, "x. "):
+        for path in (
+            "../x",
+            "/x",
+            "C:/x",
+            "C:\\x",
+            "\\\\server\\x",
+            ".bvc/config.json",
+            "CON",
+            "a/./b",
+            "a//b",
+            "a\x01",
+            nfd,
+            "x. ",
+        ):
             with self.subTest(path=path), self.assertRaises(UnsafePath):
                 gitlink.parse_lock(lock_obj({path: entry()}))
 
@@ -87,7 +121,9 @@ class TestLockFiles(helpers.TempDirTestCase):
         data = gitlink.lock_bytes(1, {"a": SHA_A}, {SHA_A: manifest(1, SHA_A)})
         gitlink.write_lock(self.tmp, "sub/bvc.lock", data, self.tmp / ".bvc" / "tmp")
         self.assertEqual((self.tmp / "sub" / "bvc.lock").read_bytes(), data)
-        self.assertEqual(gitlink.read_lock(self.tmp / "sub" / "bvc.lock").tree, {"a": SHA_A})
+        self.assertEqual(
+            gitlink.read_lock(self.tmp / "sub" / "bvc.lock").tree, {"a": SHA_A}
+        )
 
     def test_p1_write_lock_checks_path(self):
         (self.tmp / ".bvc" / "tmp").mkdir(parents=True)
@@ -115,13 +151,19 @@ class TestLockFiles(helpers.TempDirTestCase):
 
 class TestHooks(helpers.TempDirTestCase):
     def test_hook_script(self):
-        wd = Path("C:/work dir/$x`y\"z")
+        wd = Path('C:/work dir/$x`y"z')
         text = gitlink.hook_script("pre-commit", wd, "python -m bvc")
         self.assertTrue(text.startswith("#!/bin/sh\n" + gitlink.HOOK_MARK + "\n"))
-        self.assertIn('exec python -m bvc -C "C:/work dir/\\$x\\`y\\"z" git pre-commit\n', text)
+        self.assertIn(
+            'exec python -m bvc -C "C:/work dir/\\$x\\`y\\"z" git pre-commit\n', text
+        )
         self.assertTrue(gitlink.hook_line("post-commit", wd).endswith(" git pin"))
-        self.assertTrue(gitlink.hook_line("post-checkout", wd).endswith(' git post-checkout "$@"'))
-        self.assertTrue(gitlink.append_line("pre-commit", wd).endswith(" git pre-commit || exit $?"))
+        self.assertTrue(
+            gitlink.hook_line("post-checkout", wd).endswith(' git post-checkout "$@"')
+        )
+        self.assertTrue(
+            gitlink.append_line("pre-commit", wd).endswith(" git pre-commit || exit $?")
+        )
         self.assertNotIn("exit", gitlink.append_line("post-commit", wd))
 
     def test_bvc_command_in_development(self):
@@ -138,7 +180,9 @@ class TestHooks(helpers.TempDirTestCase):
         self.assertEqual(list(r.manual), ["pre-commit"])
         self.assertEqual((hooks / "pre-commit").read_text(), "#!/bin/sh\necho mine\n")
         self.assertIn(" git pre-commit || exit $?", r.manual["pre-commit"])
-        self.assertIn(gitlink.HOOK_MARK, (hooks / "post-commit").read_text(encoding="utf-8"))
+        self.assertIn(
+            gitlink.HOOK_MARK, (hooks / "post-commit").read_text(encoding="utf-8")
+        )
         # 2回目は設置済み。追記済みの既存フックも設置済みとみなす
         with open(hooks / "pre-commit", "a") as f:
             f.write(r.manual["pre-commit"] + "\n")
@@ -157,7 +201,11 @@ class TestHooks(helpers.TempDirTestCase):
 class TestGit(helpers.TempDirTestCase):
     def git(self, *args):
         return subprocess.run(
-            ["git", *args], cwd=self.tmp, check=True, capture_output=True, stdin=subprocess.DEVNULL
+            ["git", *args],
+            cwd=self.tmp,
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
         ).stdout
 
     def setUp(self):
@@ -180,7 +228,9 @@ class TestGit(helpers.TempDirTestCase):
     def test_basic(self):
         self.assertTrue(self.g.is_work_tree())
         self.assertIsNone(self.g.head())
-        self.assertTrue(str(self.g.hooks_dir()).replace("\\", "/").endswith(".git/hooks"))
+        self.assertTrue(
+            str(self.g.hooks_dir()).replace("\\", "/").endswith(".git/hooks")
+        )
         self.commit(b"v1", "1")
         head = self.g.head()
         self.assertRegex(head, "^[0-9a-f]{40}$")
@@ -208,7 +258,8 @@ class TestGit(helpers.TempDirTestCase):
         self.git("add", "bvc.lock")
         blobs = self.g.history_blobs("bvc.lock")
         self.assertEqual(
-            sorted(self.g.cat_blobs(blobs)), sorted([b"v1", b"v2", b"side", b"v3", b"stashed", b"staged"])
+            sorted(self.g.cat_blobs(blobs)),
+            sorted([b"v1", b"v2", b"side", b"v3", b"stashed", b"staged"]),
         )
 
     def test_failures(self):

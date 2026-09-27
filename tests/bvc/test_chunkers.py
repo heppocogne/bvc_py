@@ -31,7 +31,9 @@ class TestFixed(unittest.TestCase):
                 data = helpers.random_bytes(n, n)
                 parts = chunks_of(ck, data)
                 self.assertEqual(b"".join(parts), data)
-                self.assertEqual([len(p) for p in parts[:-1]], [size] * (len(parts) - 1))
+                self.assertEqual(
+                    [len(p) for p in parts[:-1]], [size] * (len(parts) - 1)
+                )
                 self.assertEqual(len(parts), -(-n // size))
 
     def test_chunk_larger_than_read_size(self):
@@ -40,9 +42,13 @@ class TestFixed(unittest.TestCase):
             ck = chunkers.FixedChunker(1000)
             data = helpers.random_bytes(2500, 1)
             pieces = list(ck.split(io.BytesIO(data)))
-            self.assertEqual([len(p) for p, _ in pieces], [300, 300, 300, 100] * 2 + [300, 200])
+            self.assertEqual(
+                [len(p) for p, _ in pieces], [300, 300, 300, 100] * 2 + [300, 200]
+            )
             self.assertEqual([e for _, e in pieces].count(True), 3)
-            self.assertEqual(chunks_of(ck, data), [data[:1000], data[1000:2000], data[2000:]])
+            self.assertEqual(
+                chunks_of(ck, data), [data[:1000], data[1000:2000], data[2000:]]
+            )
 
     def test_short_reads(self):
         # read が要求より少なく返しても正しく分割する
@@ -59,10 +65,12 @@ class TestFixed(unittest.TestCase):
             if end:
                 parts.append(cur)
                 cur = b""
-        self.assertEqual(parts, [data[i:i + 100] for i in range(0, 1234, 100)])
+        self.assertEqual(parts, [data[i : i + 100] for i in range(0, 1234, 100)])
 
     def test_params(self):
-        self.assertEqual(chunkers.FixedChunker(4096).params(), {"name": "fixed", "size": 4096})
+        self.assertEqual(
+            chunkers.FixedChunker(4096).params(), {"name": "fixed", "size": 4096}
+        )
 
 
 class TestWhole(unittest.TestCase):
@@ -79,15 +87,27 @@ class TestWhole(unittest.TestCase):
 
 class TestMakeChunker(unittest.TestCase):
     def test_ok(self):
-        self.assertIsInstance(chunkers.make_chunker({"name": "fixed", "size": 10}), chunkers.FixedChunker)
-        self.assertIsInstance(chunkers.make_chunker({"name": "whole"}), chunkers.WholeChunker)
+        self.assertIsInstance(
+            chunkers.make_chunker({"name": "fixed", "size": 10}), chunkers.FixedChunker
+        )
+        self.assertIsInstance(
+            chunkers.make_chunker({"name": "whole"}), chunkers.WholeChunker
+        )
 
     def test_bad(self):
         bad = [
-            None, [], {}, {"name": 1}, {"name": "gearx"}, {"name": "fixed"},
-            {"name": "fixed", "size": 0}, {"name": "fixed", "size": -1},
-            {"name": "fixed", "size": 1.5}, {"name": "fixed", "size": "10"},
-            {"name": "fixed", "size": True}, {"name": "fixed", "size": 10, "extra": 1},
+            None,
+            [],
+            {},
+            {"name": 1},
+            {"name": "gearx"},
+            {"name": "fixed"},
+            {"name": "fixed", "size": 0},
+            {"name": "fixed", "size": -1},
+            {"name": "fixed", "size": 1.5},
+            {"name": "fixed", "size": "10"},
+            {"name": "fixed", "size": True},
+            {"name": "fixed", "size": 10, "extra": 1},
             {"name": "fixed", "size": chunkers.MAX_FIXED_SIZE + 1},
             {"name": "whole", "size": 10},
         ]

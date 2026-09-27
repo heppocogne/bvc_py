@@ -60,7 +60,9 @@ class TestRoundtrip(StoreTestCase):
             for chunker in (FIXED, WHOLE):
                 for n in (0, 1, 999, 1000, 1001, 5555):
                     for data in (helpers.random_bytes(n, n), bytes(n)):
-                        with self.subTest(compression=compression, chunker=chunker["name"], n=n):
+                        with self.subTest(
+                            compression=compression, chunker=chunker["name"], n=n
+                        ):
                             sha, stats = self.put(data, chunker, s=s)
                             self.assertEqual(self.read(sha, s), data)
                             self.assertEqual(stats.size, n)
@@ -115,12 +117,17 @@ class TestRoundtrip(StoreTestCase):
     def test_stream_path_for_large_chunk(self):
         # STREAM_THRESHOLD を超えるチャンクは逐次保存になる。結果は同じ
         data = helpers.random_bytes(10_000, 4) + bytes(10_000)
-        with mock.patch.object(store, "STREAM_THRESHOLD", 2000), \
-                mock.patch.object(chunkers, "READ_SIZE", 700):
+        with (
+            mock.patch.object(store, "STREAM_THRESHOLD", 2000),
+            mock.patch.object(chunkers, "READ_SIZE", 700),
+        ):
             sha, stats = self.put(data, {"name": "fixed", "size": 6000})
             self.assertEqual(stats.chunks, 4)
             self.assertEqual(self.read(sha), data)
-            self.assertEqual(self.store.hash_file(io.BytesIO(data), {"name": "fixed", "size": 6000}), sha)
+            self.assertEqual(
+                self.store.hash_file(io.BytesIO(data), {"name": "fixed", "size": 6000}),
+                sha,
+            )
         # 同じ内容を普通の経路で入れると、同じマニフェストになり、チャンクも増えない
         sha2, stats2 = self.put(data, {"name": "fixed", "size": 6000})
         self.assertEqual((sha2, stats2.new_chunks), (sha, 0))
@@ -167,7 +174,9 @@ class TestCorruption(StoreTestCase):
     def assert_detected(self, reason):
         with self.assertRaises(CorruptData):
             self.read(self.msha)
-        self.assertEqual(self.store.health.records("bad_chunks")[self.victim]["reason"], reason)
+        self.assertEqual(
+            self.store.health.records("bad_chunks")[self.victim]["reason"], reason
+        )
         self.assertFalse(self.store.has_chunk(self.victim))
         self.assertFalse(self.store.manifest_ok(self.msha))
         # health.json に書かれ、開き直しても引き継がれる
@@ -222,9 +231,11 @@ class TestCorruption(StoreTestCase):
         # V-2: 知らない codec ID は壊れたデータと区別し、何も書き込まずに中止する
         helpers.set_first_byte(self.victim_path, 0x7F)
         before = self.victim_path.read_bytes()
-        for op in (lambda: self.read(self.msha),
-                   lambda: self.store.has_chunk(self.victim),
-                   lambda: self.put(self.data)):
+        for op in (
+            lambda: self.read(self.msha),
+            lambda: self.store.has_chunk(self.victim),
+            lambda: self.put(self.data),
+        ):
             with self.assertRaises(UnsupportedFormat):
                 op()
         self.assertEqual(self.victim_path.read_bytes(), before)
@@ -253,7 +264,10 @@ class TestCorruption(StoreTestCase):
         finally:
             tracemalloc.stop()
         self.assertLess(peak, 8 << 20)
-        self.assertEqual(self.store.health.records("bad_chunks")[self.victim]["reason"], "decode_error")
+        self.assertEqual(
+            self.store.health.records("bad_chunks")[self.victim]["reason"],
+            "decode_error",
+        )
 
     def test_read_error_not_quarantined(self):
         # 読み込みの OSError(使用中など)は破損の証拠ではないので、隔離しない(D-15)
@@ -265,7 +279,9 @@ class TestCorruption(StoreTestCase):
         with mock.patch.object(store, "get_codec", return_value=Failing()):
             with self.assertRaises(PermissionError):
                 self.store.get_chunk(self.victim, 1000)
-        with mock.patch.object(fsutil, "read_bytes", side_effect=PermissionError("使用中")):
+        with mock.patch.object(
+            fsutil, "read_bytes", side_effect=PermissionError("使用中")
+        ):
             with self.assertRaises(PermissionError):
                 self.store.get_manifest(self.msha)
         self.assertEqual(self.quarantined(), [])
@@ -317,7 +333,9 @@ class TestManifestCorruption(StoreTestCase):
         os.remove(self.path)
         with self.assertRaises(CorruptData):
             self.store.get_manifest(self.msha)
-        self.assertEqual(self.store.health.records("bad_manifests")[self.msha]["reason"], "missing")
+        self.assertEqual(
+            self.store.health.records("bad_manifests")[self.msha]["reason"], "missing"
+        )
 
     def test_put_replaces_corrupt_existing(self):
         # 同名のファイルが違う内容なら、隔離して書き直す
@@ -331,10 +349,19 @@ class TestManifestCorruption(StoreTestCase):
         good = json.loads(self.path.read_bytes())
         c0 = good["chunks"][0]
         variants = {
-            "chunk_sha_traversal": {**good, "chunks": [["../" + c0[0][3:], c0[1]]] + good["chunks"][1:]},
-            "chunk_sha_upper": {**good, "chunks": [[c0[0].upper(), c0[1]]] + good["chunks"][1:]},
+            "chunk_sha_traversal": {
+                **good,
+                "chunks": [["../" + c0[0][3:], c0[1]]] + good["chunks"][1:],
+            },
+            "chunk_sha_upper": {
+                **good,
+                "chunks": [[c0[0].upper(), c0[1]]] + good["chunks"][1:],
+            },
             "chunk_len_zero": {**good, "chunks": [[c0[0], 0]] + good["chunks"][1:]},
-            "chunk_len_float": {**good, "chunks": [[c0[0], 1000.0]] + good["chunks"][1:]},
+            "chunk_len_float": {
+                **good,
+                "chunks": [[c0[0], 1000.0]] + good["chunks"][1:],
+            },
             "size_mismatch": {**good, "size": good["size"] + 1},
             "size_negative": {**good, "size": -1},
             "bad_sha256": {**good, "sha256": "x"},
@@ -376,7 +403,10 @@ class TestManifestCorruption(StoreTestCase):
         sha = self.write_named({**good, "sha256": "0" * 64})
         with self.assertRaises(CorruptData):
             self.read(sha)
-        self.assertEqual(self.store.health.records("bad_manifests")[sha]["reason"], "content_mismatch")
+        self.assertEqual(
+            self.store.health.records("bad_manifests")[sha]["reason"],
+            "content_mismatch",
+        )
 
 
 class TestHealth(StoreTestCase):
@@ -389,13 +419,18 @@ class TestHealth(StoreTestCase):
         self.assertEqual(h2.records("bad_commits")["6"]["reason"], "json_error")
         h2.clear("bad_chunks", "a" * 64)
         self.assertFalse(Health(self.repodir).is_bad("bad_chunks", "a" * 64))
-        self.assertEqual(json.loads((self.repodir / "health.json").read_bytes())["format"], 1)
+        self.assertEqual(
+            json.loads((self.repodir / "health.json").read_bytes())["format"], 1
+        )
 
     def test_corrupt_becomes_empty(self):
         self.repodir.mkdir(exist_ok=True)
-        for content in (b"{", b'{"format":1,"bad_chunks":[]}',
-                        b'{"format":1,"bad_chunks":{"../x":{"time":"t","reason":"r"}}}',
-                        b'{"format":1,"bad_commits":{"-1":{"time":"t","reason":"r"}}}'):
+        for content in (
+            b"{",
+            b'{"format":1,"bad_chunks":[]}',
+            b'{"format":1,"bad_chunks":{"../x":{"time":"t","reason":"r"}}}',
+            b'{"format":1,"bad_commits":{"-1":{"time":"t","reason":"r"}}}',
+        ):
             with self.subTest(content=content):
                 (self.repodir / "health.json").write_bytes(content)
                 h = Health(self.repodir)
@@ -428,7 +463,9 @@ class TestFault(StoreTestCase):
 
     def test_manifest_write_fault(self):
         data = helpers.random_bytes(5000, 14)
-        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("atomic_write:", count=1)) as hook:
+        with mock.patch.object(
+            fsutil, "_fault_hook", helpers.FaultAt("atomic_write:", count=1)
+        ) as hook:
             hook.stage = None
             self.put(data)
             names = [c for c in hook.calls if c.startswith("atomic_write:")]
@@ -462,8 +499,10 @@ class TestIterDeleteVerify(StoreTestCase):
         # 名前の形式が違うファイルは無視する
         (self.repodir / "chunks" / "zz").mkdir()
         (self.repodir / "chunks" / chunks[0][:2] / "garbage").write_bytes(b"")
-        (self.repodir / "chunks" / "00" ).mkdir(exist_ok=True)
-        (self.repodir / "chunks" / "00" / ("11" + "0" * 62)).write_bytes(b"")  # フォルダ違い
+        (self.repodir / "chunks" / "00").mkdir(exist_ok=True)
+        (self.repodir / "chunks" / "00" / ("11" + "0" * 62)).write_bytes(
+            b""
+        )  # フォルダ違い
         self.assertEqual(sorted(self.store.iter_chunks()), chunks)
         self.store.delete_chunk(chunks[0])
         self.store.delete_manifest(sha)
@@ -495,7 +534,9 @@ class TestIterDeleteVerify(StoreTestCase):
     def test_verify_quick_finds_length_and_missing(self):
         sha, _ = self.put(helpers.random_bytes(2500, 19))
         chunks = self.store.get_manifest(sha).chunks
-        helpers.truncate_file(self.store.chunk_path(chunks[0].sha), 100)  # raw なので長さで分かる
+        helpers.truncate_file(
+            self.store.chunk_path(chunks[0].sha), 100
+        )  # raw なので長さで分かる
         res = self.store.verify_all(quick=True)
         self.assertIn("長さ", res.broken_manifests[sha])
         os.remove(self.store.chunk_path(chunks[1].sha))
@@ -574,13 +615,22 @@ class TestM4C(StoreTestCase):
         res = self.store.verify_all(quick=True)
         self.assertIn(sha, res.broken_manifests)
         self.assertTrue(self.store.health.is_bad("bad_chunks", chunks[0].sha))
-        self.assertEqual(self.store.health.records("bad_chunks")[chunks[0].sha]["reason"], "missing")
+        self.assertEqual(
+            self.store.health.records("bad_chunks")[chunks[0].sha]["reason"], "missing"
+        )
         # 1つのマニフェストでは最初の異常で止まるので、長さ違いは別のマニフェストで確かめる
-        m2 = Manifest(size=chunks[1].length, sha256=hashlib.sha256(b"").hexdigest(), chunker=FIXED,
-                      chunks=(chunks[1],))
+        m2 = Manifest(
+            size=chunks[1].length,
+            sha256=hashlib.sha256(b"").hexdigest(),
+            chunker=FIXED,
+            chunks=(chunks[1],),
+        )
         self.store.put_manifest(m2)
         self.store.verify_all(quick=True)
-        self.assertEqual(self.store.health.records("bad_chunks")[chunks[1].sha]["reason"], "length_mismatch")
+        self.assertEqual(
+            self.store.health.records("bad_chunks")[chunks[1].sha]["reason"],
+            "length_mismatch",
+        )
         self.assertIn(chunks[1].sha, self.quarantined())
 
     def test_peek_manifest_has_no_side_effects(self):
@@ -589,7 +639,10 @@ class TestM4C(StoreTestCase):
         helpers.flip_byte(self.store.manifest_path(sha))
         self.assertIsNone(self.store.peek_manifest(sha))
         self.assertIsNone(self.store.peek_manifest("c" * 64))
-        self.assertEqual((self.quarantined("manifests"), self.store.health.records("bad_manifests")), ([], {}))
+        self.assertEqual(
+            (self.quarantined("manifests"), self.store.health.records("bad_manifests")),
+            ([], {}),
+        )
 
     def test_repair_from(self):
         data = helpers.random_bytes(2500, 31)
@@ -600,7 +653,10 @@ class TestM4C(StoreTestCase):
         os.remove(self.store.manifest_path(sha))
         want_c, want_m = {chunks[1].sha, "d" * 64}, {sha}
         # 分割方式が違えば見つからない
-        self.assertEqual(self.store.repair_from(io.BytesIO(data), WHOLE, want_c, want_m), (set(), set()))
+        self.assertEqual(
+            self.store.repair_from(io.BytesIO(data), WHOLE, want_c, want_m),
+            (set(), set()),
+        )
         got = self.store.repair_from(io.BytesIO(data), FIXED, want_c, want_m)
         self.assertEqual(got, ({chunks[1].sha}, {sha}))
         self.assertTrue(self.store.manifest_ok(sha, "full"))

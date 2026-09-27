@@ -714,8 +714,16 @@ class History:
         # git のコミットと版の対応を pins.jsonl に追記する(M6-5、設計書 2.6節)。
         if bvc_id not in self._commits:
             raise RevisionError(f"版 {bvc_id} は存在しません")
-        pin = Pin(git=check_git_sha(git_sha), bvc=bvc_id, tree_hash=check_sha(tree_hash))
-        record = {"format": 1, "time": now_iso(), "git": pin.git, "bvc": pin.bvc, "tree_hash": pin.tree_hash}
+        pin = Pin(
+            git=check_git_sha(git_sha), bvc=bvc_id, tree_hash=check_sha(tree_hash)
+        )
+        record = {
+            "format": 1,
+            "time": now_iso(),
+            "git": pin.git,
+            "bvc": pin.bvc,
+            "tree_hash": pin.tree_hash,
+        }
         append_jsonl(self._bvc_dir / "pins.jsonl", record)
         self._pins.append(record)
         return pin

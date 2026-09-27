@@ -25,10 +25,15 @@ class TestCodecs(unittest.TestCase):
         for codec in codecs.CODECS_BY_ID.values():
             with self.subTest(codec=codec.name):
                 e = codec.encoder()
-                enc = b"".join([e.update(data[i:i + 70_000]) for i in range(0, len(data), 70_000)])
+                enc = b"".join(
+                    [
+                        e.update(data[i : i + 70_000])
+                        for i in range(0, len(data), 70_000)
+                    ]
+                )
                 enc += e.finish()
                 # 入力を細かく分けて渡しても復号できる
-                pieces = [enc[i:i + 999] for i in range(0, len(enc), 999)]
+                pieces = [enc[i : i + 999] for i in range(0, len(enc), 999)]
                 self.assertEqual(b"".join(codec.iter_decode(pieces, len(data))), data)
 
     def test_ids(self):

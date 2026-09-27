@@ -41,10 +41,16 @@ class TestMain(unittest.TestCase):
 
     def test_python_m_bvc(self):
         # I-13: python -m bvc で起動でき、終了コードが引き継がれる
-        r = subprocess.run([sys.executable, "-m", "bvc", "--help"], stdin=subprocess.DEVNULL, capture_output=True)
+        r = subprocess.run(
+            [sys.executable, "-m", "bvc", "--help"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(b"usage: bvc", r.stdout)
-        r = subprocess.run([sys.executable, "-m", "bvc"], stdin=subprocess.DEVNULL, capture_output=True)
+        r = subprocess.run(
+            [sys.executable, "-m", "bvc"], stdin=subprocess.DEVNULL, capture_output=True
+        )
         self.assertEqual(r.returncode, cli.EXIT_USAGE)
 
 

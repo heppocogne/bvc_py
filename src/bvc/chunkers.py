@@ -58,7 +58,9 @@ class FixedChunker(Chunker):
 
     def __init__(self, size: int) -> None:
         if type(size) is not int or not 1 <= size <= MAX_FIXED_SIZE:
-            raise ValueError(f"fixed の size は 1〜{MAX_FIXED_SIZE} の整数にしてください: {size!r}")
+            raise ValueError(
+                f"fixed の size は 1〜{MAX_FIXED_SIZE} の整数にしてください: {size!r}"
+            )
         self.size = size
 
     def params(self) -> dict:
@@ -94,9 +96,13 @@ class GearChunker(Chunker):
     def __init__(self, min: int, avg: int, max: int, seed: int) -> None:
         # min/avg/max はバイト単位。avg は 2 の累乗。seed は int(Rabin fingerprint テーブル生成用)。
         if not isinstance(avg, int) or avg <= 0 or (avg & (avg - 1)) != 0:
-            raise ValueError(f"gear の avg は 2 の累乗の正の整数にしてください: {avg!r}")
+            raise ValueError(
+                f"gear の avg は 2 の累乗の正の整数にしてください: {avg!r}"
+            )
         if not isinstance(min, int) or not 1 <= min <= avg:
-            raise ValueError(f"gear の min は 1 以上 avg 以下の整数にしてください: {min!r}")
+            raise ValueError(
+                f"gear の min は 1 以上 avg 以下の整数にしてください: {min!r}"
+            )
         if not isinstance(max, int) or not avg <= max:
             raise ValueError(f"gear の max は avg 以上の整数にしてください: {max!r}")
         if not isinstance(seed, int):
@@ -113,7 +119,13 @@ class GearChunker(Chunker):
         self._table = [rng.randint(0, 0xFFFFFFFF) for _ in range(256)]
 
     def params(self) -> dict:
-        return {"name": self.name, "min": self.min, "avg": self.avg, "max": self.max, "seed": self.seed}
+        return {
+            "name": self.name,
+            "min": self.min,
+            "avg": self.avg,
+            "max": self.max,
+            "seed": self.seed,
+        }
 
     def split(self, f: BinaryIO) -> Iterator[tuple[bytes, bool]]:
         # Rabin fingerprint ベースの rolling hash で CDC。
@@ -154,9 +166,13 @@ def make_chunker(spec: Any) -> Chunker:
         raise ValueError(f"chunker の指定が不正です: {spec!r}")
     cls = CHUNKERS.get(spec["name"])
     if cls is None:
-        raise ValueError(f"不明な分割方式です: {spec['name']!r}(使えるもの: {', '.join(CHUNKERS)})")
+        raise ValueError(
+            f"不明な分割方式です: {spec['name']!r}(使えるもの: {', '.join(CHUNKERS)})"
+        )
     params = {k: v for k, v in spec.items() if k != "name"}
     try:
         return cls(**params)
     except TypeError as e:
-        raise ValueError(f"{spec['name']} の設定項目が不正です: {sorted(params)}") from e
+        raise ValueError(
+            f"{spec['name']} の設定項目が不正です: {sorted(params)}"
+        ) from e

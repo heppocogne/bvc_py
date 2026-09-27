@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import shutil
 from dataclasses import fields
 from pathlib import Path
@@ -27,7 +28,15 @@ from .errors import (
     UnsupportedFormat,
     UsageError,
 )
-from .fsutil import BVC_DIR, FileLock, atomic_write_json, check_relpath, compile_glob, glob_match, load_json
+from .fsutil import (
+    BVC_DIR,
+    FileLock,
+    atomic_write_json,
+    check_relpath,
+    compile_glob,
+    glob_match,
+    load_json,
+)
 from .gitlink import Git
 from .history import History, check_branch_name
 from .model import (
@@ -111,13 +120,13 @@ def _op_entry(op: str, args: dict, head: Head) -> dict:
 class _LockView(NamedTuple):
     # 現在位置の版と bvc.lock・lockstate.json の状態(M6-2)。_update_lock / _check_lock で共有する。
 
-    tree: dict[str, str]        # 現在位置の版の tree
-    th: str                     # その tree_hash
-    found: bool                 # lockstate.json の記録があるか
-    saved: str | None           # 記録された tree_hash(None は bvc.lock が無い状態、または不明)
-    lock: LockFile | None       # 作業ツリーの bvc.lock(無い・読めなければ None)
-    err: BvcError | None        # 読めなかった理由
-    raw: bytes | None           # 元のバイト列(無ければ None)
+    tree: dict[str, str]  # 現在位置の版の tree
+    th: str  # その tree_hash
+    found: bool  # lockstate.json の記録があるか
+    saved: str | None  # 記録された tree_hash(None は bvc.lock が無い状態、または不明)
+    lock: LockFile | None  # 作業ツリーの bvc.lock(無い・読めなければ None)
+    err: BvcError | None  # 読めなかった理由
+    raw: bytes | None  # 元のバイト列(無ければ None)
 
     @property
     def lh(self) -> str | None:
@@ -245,7 +254,9 @@ def _parse_git_config(git: Any, track: list[str], ignore: list[str]) -> GitConfi
         if check_relpath(lock_file) != lock_file:
             raise UnsafePath("")
     except UnsafePath:
-        raise _config_error(f"git.lock_file に使えないパスです: {lock_file!r:.80}") from None
+        raise _config_error(
+            f"git.lock_file に使えないパスです: {lock_file!r:.80}"
+        ) from None
     if (
         enabled
         and any(glob_match(p, lock_file) for p in track)
@@ -256,7 +267,9 @@ def _parse_git_config(git: Any, track: list[str], ignore: list[str]) -> GitConfi
         )
     pre_commit = git.get("pre_commit", "snapshot")
     if pre_commit not in ("snapshot", "reject"):
-        raise _config_error(f"git.pre_commit は snapshot か reject にしてください: {pre_commit!r}")
+        raise _config_error(
+            f"git.pre_commit は snapshot か reject にしてください: {pre_commit!r}"
+        )
     return GitConfig(enabled=enabled, lock_file=lock_file, pre_commit=pre_commit)
 
 
@@ -321,7 +334,11 @@ class Repo:
             "threads": 0,
         }
         if git:
-            config_data["git"] = {"enabled": True, "lock_file": "bvc.lock", "pre_commit": "snapshot"}
+            config_data["git"] = {
+                "enabled": True,
+                "lock_file": "bvc.lock",
+                "pre_commit": "snapshot",
+            }
         config = parse_config(config_data)
         found = cls.find_workdir(workdir)
         if found is not None:
@@ -358,7 +375,9 @@ class Repo:
             )
             repo = cls(workdir, config, lock)
             repo._history.load()
-            state = repo._worktree.state(base_tree={}, store_chunks=True, progress=progress)
+            state = repo._worktree.state(
+                base_tree={}, store_chunks=True, progress=progress
+            )
             if not state.tree:
                 logger.warning(
                     "追跡対象のファイルがありません(パターン: %s)",
@@ -459,13 +478,23 @@ class Repo:
         problem = wt.check_index()
         if problem is not None:
             wt.reset_index()
-            note("index.json", problem, "空で作り直しました(次の操作で全追跡ファイルをハッシュし直します)")
+            note(
+                "index.json",
+                problem,
+                "空で作り直しました(次の操作で全追跡ファイルをハッシュし直します)",
+            )
 
         health = self._store.health
         if health.problem is not None:
-            problem = {"missing": "ファイルがありません"}.get(health.problem, health.problem)
+            problem = {"missing": "ファイルがありません"}.get(
+                health.problem, health.problem
+            )
             health.rebuild()
-            note("health.json", problem, "空で作り直しました(壊れたデータは次の verify で再検出されます)")
+            note(
+                "health.json",
+                problem,
+                "空で作り直しました(壊れたデータは次の verify で再検出されます)",
+            )
 
         if recovered:
             head = h.head()
@@ -494,7 +523,9 @@ class Repo:
             raise BvcError(
                 f"HEAD.json を復旧できません(読み込める版がありません)。{BVC_DIR}/commits を確認してください"
             )
-        tree = self._worktree.state(base_tree={}, store_chunks=False, find_hints=False).tree
+        tree = self._worktree.state(
+            base_tree={}, store_chunks=False, find_hints=False
+        ).tree
         for c in living:  # 新しい順
             if c.tree == tree:
                 return Head(c.id, c.branch), "作業ファイルと内容が一致する版"
@@ -624,7 +655,9 @@ class Repo:
             raise CannotMove(
                 f"版 {head.at} は根(親の無い版)なので、これ以上戻れません", at=head.at
             )
-        target, skipped = self._skip_broken("undo", target, skip_broken, h.effective_parent)
+        target, skipped = self._skip_broken(
+            "undo", target, skip_broken, h.effective_parent
+        )
         return self._move(
             "undo", "", reason, target, None, allow_missing, progress, skipped=skipped
         )
@@ -693,7 +726,8 @@ class Repo:
                 cur = step(cur)
             except CannotMove as e:
                 raise BrokenVersion(
-                    f"版 {', '.join(map(str, skipped))} は壊れています。{e}", commit=skipped[0]
+                    f"版 {', '.join(map(str, skipped))} は壊れています。{e}",
+                    commit=skipped[0],
                 ) from None
         if cur is None:
             raise BrokenVersion(
@@ -942,7 +976,9 @@ class Repo:
                     cache[sha] = False
                 else:
                     m = store.peek_manifest(sha)
-                    cache[sha] = m is not None and any(r.sha in bad_chunks for r in m.chunks)
+                    cache[sha] = m is not None and any(
+                        r.sha in bad_chunks for r in m.chunks
+                    )
             return cache[sha]
 
         def broken(c: Commit) -> bool:
@@ -1122,7 +1158,9 @@ class Repo:
                 manifests.update(h.get(c).tree.values())
         # 既に無いマニフェストは守る必要が無い(読めないものとして扱うと、チャンクの削除まで止まるため)
         manifests.update(
-            m for m in lock_manifests if os.path.exists(fsutil.os_path(s.manifest_path(m)))
+            m
+            for m in lock_manifests
+            if os.path.exists(fsutil.os_path(s.manifest_path(m)))
         )
         chunks: set[str] = set()
         unreadable = []
@@ -1270,7 +1308,11 @@ class Repo:
             checked_manifests=res.checked_manifests,
         )
         pinned = h.pinned_ids()
-        kept = [c for c in h.ids(include_discarded=True) if not h.is_discarded(c) or c in pinned]
+        kept = [
+            c
+            for c in h.ids(include_discarded=True)
+            if not h.is_discarded(c) or c in pinned
+        ]
         report.checked_commits = len(kept)
 
         # 版ファイルの状態を記録する(読めるようになったものは記録から消す)
@@ -1372,7 +1414,11 @@ class Repo:
                         sizes.add(m.size)
         specs: dict[bytes, dict] = {}
         rule_chunkers = [r["chunker"] for r in self.config.rules if "chunker" in r]
-        for ck in [self.config.chunker, *rule_chunkers, *(m.chunker for m in manifests.values())]:
+        for ck in [
+            self.config.chunker,
+            *rule_chunkers,
+            *(m.chunker for m in manifests.values()),
+        ]:
             specs.setdefault(fsutil.canonical_json(ck), ck)
 
         done_chunks: set[str] = set()
@@ -1385,7 +1431,9 @@ class Repo:
                 with open(fsutil.os_path(self.workdir / rel), "rb") as f:
                     for spec in specs.values():
                         try:
-                            got_c, got_m = s.repair_from(f, spec, want_chunks, want_manifests)
+                            got_c, got_m = s.repair_from(
+                                f, spec, want_chunks, want_manifests
+                            )
                         except ValueError:
                             continue  # 記録された分割方式が使えない(不明な名前など)
                         finally:
@@ -1412,7 +1460,7 @@ class Repo:
         if self._git is None:
             raise BvcError(
                 "git 連携が無効です(config.json の git.enabled が false)。"
-                "有効にするには config.json に \"git\": {\"enabled\": true} を書いてください"
+                '有効にするには config.json に "git": {"enabled": true} を書いてください'
             )
         return self._git
 
@@ -1444,7 +1492,9 @@ class Repo:
             return None
         tree = h.get(head.at).tree
         found, saved = gitlink.read_lockstate(self.bvc_dir)
-        return _LockView(tree, gitlink.tree_hash(tree), found, saved, *self._read_work_lock())
+        return _LockView(
+            tree, gitlink.tree_hash(tree), found, saved, *self._read_work_lock()
+        )
 
     def _update_lock(self, head: Head, view: _LockView | None = None) -> None:
         # HEAD を書いた直後に bvc.lock を現在位置の版に合わせる(M6-2、仕様書 5.1節、設計書 5節)。
@@ -1477,11 +1527,15 @@ class Repo:
                     )
                     self._history.log_op(
                         {
-                            **_op_entry("lock_overwrite", {"lock_file": lock_file}, head),
+                            **_op_entry(
+                                "lock_overwrite", {"lock_file": lock_file}, head
+                            ),
                             "previous": v.raw.decode("utf-8", "replace"),
                         }
                     )
-                manifests = {sha: self._store.get_manifest(sha) for sha in set(v.tree.values())}
+                manifests = {
+                    sha: self._store.get_manifest(sha) for sha in set(v.tree.values())
+                }
                 gitlink.write_lock(
                     self.workdir,
                     lock_file,
@@ -1493,7 +1547,9 @@ class Repo:
             self.lock_status = "ok"
         except (OSError, CorruptData, UnsafePath) as e:
             logger.warning(
-                "%s を更新できませんでした(%s)。次に bvc を実行したときに更新します", lock_file, e
+                "%s を更新できませんでした(%s)。次に bvc を実行したときに更新します",
+                lock_file,
+                e,
             )
 
     def _check_lock(self, warn: bool = True) -> None:
@@ -1510,7 +1566,9 @@ class Repo:
             if v.found:
                 self.lock_status = "missing"
             else:
-                self._update_lock(head, v)  # まだ書いていない(init の途中で中断した、手で有効にした)
+                self._update_lock(
+                    head, v
+                )  # まだ書いていない(init の途中で中断した、手で有効にした)
             return
         lh = v.lh
         if lh is not None and lh in (v.th, v.saved):
@@ -1520,7 +1578,8 @@ class Repo:
         if not warn:
             return
         reason = (
-            f"読み込めません({v.err})" if v.err is not None
+            f"読み込めません({v.err})"
+            if v.err is not None
             else f"現在位置の版 {head.at} と内容が一致しません"
         )
         logger.warning(
@@ -1536,7 +1595,9 @@ class Repo:
         # 内容が同じ健全な版を探す。hint(bvc_commit)を優先し、無ければ新しい順で最初のもの。
         h = self._history
         candidates = [
-            c for c in h.ids(include_discarded) if h.tree_known(c) and h.get(c).tree == tree
+            c
+            for c in h.ids(include_discarded)
+            if h.tree_known(c) and h.get(c).tree == tree
         ]
         if hint in candidates:
             candidates.remove(hint)
@@ -1601,7 +1662,14 @@ class Repo:
         args = {"bvc_commit": hint}
         if target is not None:
             res = self._move(
-                "sync", "", "", target, h.get(target).branch, allow_missing, progress, args
+                "sync",
+                "",
+                "",
+                target,
+                h.get(target).branch,
+                allow_missing,
+                progress,
+                args,
             )
             return SyncResult(**_fields_of(res))
         self._check_lock_data(lock, what)
@@ -1622,9 +1690,16 @@ class Repo:
         h = self._history
         what = f"HEAD:{self.config.git.lock_file}"
         sha = self._git.head()
-        data = self._git.blob_at(sha, self.config.git.lock_file) if sha is not None else None
+        data = (
+            self._git.blob_at(sha, self.config.git.lock_file)
+            if sha is not None
+            else None
+        )
         if data is None:
-            logger.info("git のコミットに %s が無いため、記録しません", self.config.git.lock_file)
+            logger.info(
+                "git のコミットに %s が無いため、記録しません",
+                self.config.git.lock_file,
+            )
             return PinResult(changed=False)
         try:
             lock = gitlink.parse_lock(data, what)
@@ -1657,7 +1732,9 @@ class Repo:
                     "bvc commit で記録してから git commit してください(git.pre_commit=reject)"
                 )
         else:
-            res = self.commit(message="auto: git pre-commit", kind="auto", progress=progress)
+            res = self.commit(
+                message="auto: git pre-commit", kind="auto", progress=progress
+            )
             if res.changed:
                 result.changed = True
                 result.auto_commit = res.commit
@@ -1669,14 +1746,19 @@ class Repo:
         if staged is None:
             if raw is not None and not staged_blobs:
                 logger.warning(
-                    "%s が git にステージされていません(git add %s)", cfg.lock_file, cfg.lock_file
+                    "%s が git にステージされていません(git add %s)",
+                    cfg.lock_file,
+                    cfg.lock_file,
                 )
             return result
         what = f"ステージされた {cfg.lock_file}"
         try:
             lock = gitlink.parse_lock(staged, what)
             self._check_lock_data(lock, what)
-            if self._find_by_tree(lock.tree, lock.bvc_commit, include_discarded=True) is None:
+            if (
+                self._find_by_tree(lock.tree, lock.bvc_commit, include_discarded=True)
+                is None
+            ):
                 raise CorruptData(f"{what} と内容が一致する健全な版がありません")
         except (IntegrityError, UnsupportedFormat) as e:
             raise SafetyAbort(
@@ -1685,17 +1767,24 @@ class Repo:
         result.staged_ok = True
         if work is None or work.tree != lock.tree:
             logger.warning(
-                "作業ツリーの %s の変更がステージされていません(git add %s)", cfg.lock_file, cfg.lock_file
+                "作業ツリーの %s の変更がステージされていません(git add %s)",
+                cfg.lock_file,
+                cfg.lock_file,
             )
         return result
 
-    def git_post_checkout(self, progress: ProgressFn | None = None) -> PostCheckoutResult:
+    def git_post_checkout(
+        self, progress: ProgressFn | None = None
+    ) -> PostCheckoutResult:
         # post-checkout(M6-6)。bvc.lock が現在位置の版と違えば sync する。失敗時の表示は cli が行う。
         if self._git is None:
             return PostCheckoutResult(changed=False)
         lock, err, raw = self._read_work_lock()
         if raw is None:
-            logger.info("%s が無いコミットです。作業ファイルはそのままです", self.config.git.lock_file)
+            logger.info(
+                "%s が無いコミットです。作業ファイルはそのままです",
+                self.config.git.lock_file,
+            )
             return PostCheckoutResult(changed=False)
         h = self._history
         head = h.head()
@@ -1716,7 +1805,10 @@ class Repo:
             datas.append((what, raw))
         if not no_git:
             blobs = self._git.history_blobs(what)
-            datas += [(f"git の {what}({b[:12]})", d) for b, d in zip(blobs, self._git.cat_blobs(blobs))]
+            datas += [
+                (f"git の {what}({b[:12]})", d)
+                for b, d in zip(blobs, self._git.cat_blobs(blobs))
+            ]
         out: set[str] = set()
         for name, data in datas:
             try:

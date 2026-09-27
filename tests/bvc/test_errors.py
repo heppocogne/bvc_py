@@ -23,8 +23,14 @@ class TestErrors(unittest.TestCase):
     def test_subclasses_inherit_exit_code(self):
         # I-5: 細分したクラスは親のサブクラスで、exit_code を引き継ぐ
         cases = {
-            E.SafetyAbort: [E.MissingFiles, E.FileBusy, E.FileChanging, E.Locked,
-                            E.PinnedCommit, E.DiskFull],
+            E.SafetyAbort: [
+                E.MissingFiles,
+                E.FileBusy,
+                E.FileChanging,
+                E.Locked,
+                E.PinnedCommit,
+                E.DiskFull,
+            ],
             E.IntegrityError: [E.CorruptData, E.BrokenVersion, E.UnsafePath],
         }
         for parent, children in cases.items():

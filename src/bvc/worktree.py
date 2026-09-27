@@ -43,7 +43,15 @@ from .fsutil import (
     replace,
     resolve_in_workdir,
 )
-from .model import Config, Head, Manifest, ProgressEvent, PutStats, RestoreResult, WorkState
+from .model import (
+    Config,
+    Head,
+    Manifest,
+    ProgressEvent,
+    PutStats,
+    RestoreResult,
+    WorkState,
+)
 from .store import ObjectStore, ProgressFn, manifest_sha
 
 logger = logging.getLogger(__name__)
@@ -230,7 +238,9 @@ class Worktree:
                     # 保存するときは、再利用するマニフェストとチャンクが健全か確かめる。
                     # 壊れていれば読み直して保存し直す(設計書 4.11節、C-1)
                     not store_chunks
-                    or self.store.manifest_ok(ent["manifest"], self.config.commit_verify)
+                    or self.store.manifest_ok(
+                        ent["manifest"], self.config.commit_verify
+                    )
                 )
             ):
                 tree[rel] = ent["manifest"]
@@ -250,7 +260,13 @@ class Worktree:
 
         # 名前変更の検知(設計書 4.3節)
         renamed, missing, hints = self._detect_renames(
-            gone, added, base_tree, tree, renames, self.config.rename_threshold, find_hints
+            gone,
+            added,
+            base_tree,
+            tree,
+            renames,
+            self.config.rename_threshold,
+            find_hints,
         )
         renamed_to = {r[1] for r in renamed}
         added = [p for p in added if p not in renamed_to]
@@ -269,7 +285,11 @@ class Worktree:
         )
 
     def _hash_file(
-        self, full: Path, rel: str, store_chunks: bool, progress: ProgressFn | None = None
+        self,
+        full: Path,
+        rel: str,
+        store_chunks: bool,
+        progress: ProgressFn | None = None,
     ) -> tuple[str, PutStats, os.stat_result]:
         # stat₁ → 読み込み(分割・ハッシュ・保存)→ stat₂。stat が変わっていれば読み直す。
         chunker, compression = self._rule_for(rel)
@@ -499,7 +519,9 @@ class Worktree:
             g = resolve(g, gone, "前の版にあって作業フォルダから消えた追跡ファイル")
             n = resolve(n, added, "新しく追加された追跡ファイル")
             if g in used_g or n in used_n:
-                raise UsageError(f"--rename: 同じパスが複数回指定されています: {g}={n}", path=g)
+                raise UsageError(
+                    f"--rename: 同じパスが複数回指定されています: {g}={n}", path=g
+                )
             used_g.add(g)
             used_n.add(n)
             out.append((g, n))
@@ -527,13 +549,17 @@ class Worktree:
             with open(os_path(full), "rb") as f:
                 m = self.store.build_manifest(f, chunker)
         except FileNotFoundError as e:
-            raise FileChanging(f"読み取り中にファイルが消えました: {rel}", path=rel) from e
+            raise FileChanging(
+                f"読み取り中にファイルが消えました: {rel}", path=rel
+            ) from e
         except OSError as e:
             raise FileBusy(f"ファイルを読み取れません: {rel}({e})", path=rel) from e
         # 走査の後に書き換わっていれば、この走査の結果とは別物なので使わない
         return m if manifest_sha(m) == sha else None
 
-    def _find_hints(self, missing: list[str], old_m: _ManifestCache) -> dict[str, list[str]]:
+    def _find_hints(
+        self, missing: list[str], old_m: _ManifestCache
+    ) -> dict[str, list[str]]:
         # 作業フォルダ直下と、missing のあったフォルダだけを探す(設計書 4.3節の5)。
         # 追跡パターン外の通常ファイルのうち、サイズと内容全体の SHA-256 が一致するもの。
         # 表示のためだけの情報なので、読めないファイルは飛ばす。
@@ -592,7 +618,9 @@ class Worktree:
 
     # --- 修復の候補(verify --repair。設計書 4.9節) ---
 
-    def repair_candidates(self, names: Collection[str], sizes: Collection[int]) -> list[str]:
+    def repair_candidates(
+        self, names: Collection[str], sizes: Collection[int]
+    ) -> list[str]:
         # 修復の材料にするファイル(作業フォルダからの相対パス。実際の名前)を返す。
         # 追跡ファイルすべてと、追跡対象外の通常ファイルのうち、ファイル名(大文字小文字を問わない)が
         # names のどれかと一致するもの、またはサイズが sizes のどれかと一致するもの。

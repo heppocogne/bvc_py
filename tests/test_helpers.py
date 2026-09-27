@@ -54,7 +54,9 @@ class TestHelpers(helpers.TempDirTestCase):
         helpers.write_random_file(self.tmp / "a.bin", 5, seed=1)
         helpers.write_random_file(self.tmp / "d" / "b.bin", 5, seed=2)
         helpers.write_random_file(self.tmp / ".bvc" / "HEAD.json", 5, seed=3)
-        helpers.write_random_file(self.tmp / "d" / ".bvc" / "x", 5, seed=4)  # 直下以外は除かない
+        helpers.write_random_file(
+            self.tmp / "d" / ".bvc" / "x", 5, seed=4
+        )  # 直下以外は除かない
         self.assertEqual(
             sorted(helpers.tree_hashes(self.tmp)), ["a.bin", "d/.bvc/x", "d/b.bin"]
         )

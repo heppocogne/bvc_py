@@ -284,7 +284,9 @@ def to_jsonable(obj: Any) -> Any:
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        out = {f.name: to_jsonable(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+        out = {
+            f.name: to_jsonable(getattr(obj, f.name)) for f in dataclasses.fields(obj)
+        }
         for name in _public_properties(type(obj)):
             out[name] = to_jsonable(getattr(obj, name))
         return out
@@ -304,7 +306,11 @@ def _public_properties(cls: type) -> tuple[str, ...]:
     names = []
     for klass in reversed(cls.__mro__):
         for name, value in vars(klass).items():
-            if isinstance(value, property) and not name.startswith("_") and name not in names:
+            if (
+                isinstance(value, property)
+                and not name.startswith("_")
+                and name not in names
+            ):
                 names.append(name)
     return tuple(names)
 
@@ -313,7 +319,9 @@ def _print_json(args: argparse.Namespace, result: Any) -> None:
     # 結果を1つの JSON として stdout に書く。"changed" と "warnings" を必ず含める(仕様書 2.2節・5節)。
     data = to_jsonable(result)
     if not isinstance(data, dict) or "changed" not in data:
-        raise TypeError(f"--json の出力に changed がありません: {type(result).__name__}")
+        raise TypeError(
+            f"--json の出力に changed がありません: {type(result).__name__}"
+        )
     data["warnings"] = list(getattr(args, "warnings", None) or ())
     # 出力先が UTF-8 でなければ ASCII だけで書く(\\uXXXX。どの文字コードでも解析できる)
     ascii_only = _encoding_of(sys.stdout) not in ("utf-8", "utf-16", "utf-32")
@@ -388,7 +396,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="除外パターン(複数指定可)",
     )
     p.add_argument(
-        "--git", action="store_true", help="git 連携を有効にし、bvc.lock を作ってフックを設置する"
+        "--git",
+        action="store_true",
+        help="git 連携を有効にし、bvc.lock を作ってフックを設置する",
     )
 
     p = sub.add_parser("commit", help="追跡ファイルの現状を版として記録する")
@@ -411,57 +421,111 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--discarded", action="store_true", help="削除済みの版も表示する")
 
     allow_missing_help = "見つからない追跡ファイルを、自動コミットで削除として記録する"
-    for name, help_text in (("undo", "1つ前の版に戻る"), ("redo", "戻したのを取り消す(先端へ進む)")):
+    for name, help_text in (
+        ("undo", "1つ前の版に戻る"),
+        ("redo", "戻したのを取り消す(先端へ進む)"),
+    ):
         p = sub.add_parser(name, help=help_text)
-        p.add_argument("-m", "--message", dest="reason", default="", metavar="<理由>", help="理由(操作ログに記録する)")
+        p.add_argument(
+            "-m",
+            "--message",
+            dest="reason",
+            default="",
+            metavar="<理由>",
+            help="理由(操作ログに記録する)",
+        )
         p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
         p.add_argument(
-            "--skip-broken", action="store_true", help="壊れた版を飛ばして、同じ方向で最も近い健全な版へ移動する"
+            "--skip-broken",
+            action="store_true",
+            help="壊れた版を飛ばして、同じ方向で最も近い健全な版へ移動する",
         )
 
     p = sub.add_parser("goto", help="指定の版へ移動する")
-    p.add_argument("rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)")
+    p.add_argument(
+        "rev", metavar="<版>", help="版番号、@、ブランチ名など(リビジョン式)"
+    )
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
     p = sub.add_parser("note", help="版にコメントを追記する")
-    p.add_argument("-m", "--message", dest="text", required=True, metavar="<本文>", help="コメントの本文")
-    p.add_argument("-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    p.add_argument(
+        "-m",
+        "--message",
+        dest="text",
+        required=True,
+        metavar="<本文>",
+        help="コメントの本文",
+    )
+    p.add_argument(
+        "-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は @)"
+    )
 
     p = sub.add_parser("branch", help="ブランチの一覧・名前の付け外し")
-    bsub = p.add_subparsers(dest="branch_command", metavar="<操作>", title="操作(省略時は一覧)")
-    bp = bsub.add_parser("name", help="版が属するブランチに名前を付ける(既存の名前は付け替える)")
+    bsub = p.add_subparsers(
+        dest="branch_command", metavar="<操作>", title="操作(省略時は一覧)"
+    )
+    bp = bsub.add_parser(
+        "name", help="版が属するブランチに名前を付ける(既存の名前は付け替える)"
+    )
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
-    bp.add_argument("rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)")
+    bp.add_argument(
+        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)"
+    )
     bp = bsub.add_parser("unname", help="名前を外す")
     bp.add_argument("name", metavar="<名前>", help="ブランチ名")
 
     p = sub.add_parser("discard", help="版に削除の印を付ける(データは gc まで残る)")
-    p.add_argument("rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)")
-    p.add_argument("--force", action="store_true", help="git のコミットが参照している版でも削除する")
+    p.add_argument(
+        "rev", nargs="?", default="@", metavar="<版>", help="対象の版(省略時は @)"
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="git のコミットが参照している版でも削除する",
+    )
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
     p = sub.add_parser("gc", help="削除済みの版と不要なデータを消す")
-    p.add_argument("--dry-run", action="store_true", help="削除対象と容量を表示するだけで、何も削除しない")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="削除対象と容量を表示するだけで、何も削除しない",
+    )
     p.add_argument("--no-git", action="store_true", help="git の履歴による保護を省く")
 
     p = sub.add_parser("verify", help="保存データを検査する(異常が残れば終了コード 1)")
-    p.add_argument("--quick", action="store_true", help="チャンクの存在とヘッダだけを確認する")
-    p.add_argument("--repair", action="store_true", help="壊れたデータを作業フォルダのファイルから修復する")
+    p.add_argument(
+        "--quick", action="store_true", help="チャンクの存在とヘッダだけを確認する"
+    )
+    p.add_argument(
+        "--repair",
+        action="store_true",
+        help="壊れたデータを作業フォルダのファイルから修復する",
+    )
 
     p = sub.add_parser("sync", help="bvc.lock の内容に作業ファイルを合わせる(git 連携)")
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
     p.add_argument(
-        "--require-lock", action="store_true", help="bvc.lock が無ければ終了コード 1 にする"
+        "--require-lock",
+        action="store_true",
+        help="bvc.lock が無ければ終了コード 1 にする",
     )
 
     p = sub.add_parser("git", help="git 連携(フックの設置、フック用のコマンド)")
     gsub = p.add_subparsers(dest="git_command", metavar="<操作>", title="操作")
     gsub.required = True
-    gsub.add_parser("install-hooks", help="pre-commit / post-commit / post-checkout を設置する")
+    gsub.add_parser(
+        "install-hooks", help="pre-commit / post-commit / post-checkout を設置する"
+    )
     gsub.add_parser("pin", help="(フック用)git の HEAD と bvc の版の対応を記録する")
     gsub.add_parser("pre-commit", help="(フック用)")
     gp = gsub.add_parser("post-checkout", help="(フック用)")
-    gp.add_argument("hook_args", nargs="*", metavar="<引数>", help="git が渡す引数(前の HEAD、新しい HEAD、フラグ)")
+    gp.add_argument(
+        "hook_args",
+        nargs="*",
+        metavar="<引数>",
+        help="git が渡す引数(前の HEAD、新しい HEAD、フラグ)",
+    )
 
     return parser
 
@@ -566,7 +630,11 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
     workdir = start / args.path if args.path else start
     hooks: HooksResult | None = None
     with Repo.init(
-        workdir, track=args.track, ignore=args.ignore, git=args.git, progress=args.progress
+        workdir,
+        track=args.track,
+        ignore=args.ignore,
+        git=args.git,
+        progress=args.progress,
     ) as repo:
         entry = repo.log(limit=1)[0]
         if args.git:
@@ -574,11 +642,20 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
             try:
                 hooks = repo.install_hooks()
             except BvcError as e:
-                logger.warning("git のフックを設置できませんでした: %s(bvc git install-hooks で設置できます)", e)
+                logger.warning(
+                    "git のフックを設置できませんでした: %s(bvc git install-hooks で設置できます)",
+                    e,
+                )
     commit = entry.commit
     if args.json:
         _print_json(
-            args, {"changed": True, "workdir": repo.workdir, "commit": commit, "hooks": hooks}
+            args,
+            {
+                "changed": True,
+                "workdir": repo.workdir,
+                "commit": commit,
+                "hooks": hooks,
+            },
         )
         return EXIT_OK
     logger.info(
@@ -589,7 +666,10 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
     )
     if args.git:
         lock_file = repo.config.git.lock_file
-        logger.info("git 連携を有効にしました。%s を git add してコミットしてください", lock_file)
+        logger.info(
+            "git 連携を有効にしました。%s を git add してコミットしてください",
+            lock_file,
+        )
         if hooks is not None:
             _log_hooks(hooks)
         logger.info("推奨する .gitignore:")
@@ -643,7 +723,12 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
     if args.json:
         _print_json(
             args,
-            {"changed": False, "uncommitted": state, "entries": entries, "lock_status": repo.lock_status},
+            {
+                "changed": False,
+                "uncommitted": state,
+                "entries": entries,
+                "lock_status": repo.lock_status,
+            },
         )
     else:
         _print_text(format_log(entries, state))
@@ -685,7 +770,9 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
     if args.json:
         _print_json(args, {"changed": True, "note": note})
     else:
-        logger.info("版 %d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit))
+        logger.info(
+            "版 %d(%s)にコメントを追加しました", note.commit_id, _commit_label(commit)
+        )
     return EXIT_OK
 
 
@@ -706,9 +793,13 @@ def _cmd_branch(args: argparse.Namespace, start: Path) -> int:
     if args.json:
         _print_json(args, {"changed": True, "branch": info})
     elif args.branch_command == "name":
-        logger.info("ブランチ(先端 %s)に名前 '%s' を付けました", _or_none(info.tip), args.name)
+        logger.info(
+            "ブランチ(先端 %s)に名前 '%s' を付けました", _or_none(info.tip), args.name
+        )
     else:
-        logger.info("ブランチ(先端 %s)から名前 '%s' を外しました", _or_none(info.tip), args.name)
+        logger.info(
+            "ブランチ(先端 %s)から名前 '%s' を外しました", _or_none(info.tip), args.name
+        )
     return EXIT_OK
 
 
@@ -730,7 +821,9 @@ def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
 
 def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
-        result = repo.gc(dry_run=args.dry_run, no_git=args.no_git, progress=args.progress)
+        result = repo.gc(
+            dry_run=args.dry_run, no_git=args.no_git, progress=args.progress
+        )
     if args.json:
         _print_json(args, result)
         return EXIT_OK
@@ -741,7 +834,9 @@ def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
 def _cmd_verify(args: argparse.Namespace, start: Path) -> int:
     # 異常が残っていれば終了コード 1(仕様書 3.10節)。
     with Repo.open(start) as repo:
-        result = repo.verify(quick=args.quick, repair=args.repair, progress=args.progress)
+        result = repo.verify(
+            quick=args.quick, repair=args.repair, progress=args.progress
+        )
     code = EXIT_OK if result.ok else EXIT_ERROR
     if args.json:
         _print_json(args, result)
@@ -758,7 +853,9 @@ def _cmd_sync(args: argparse.Namespace, start: Path) -> int:
     # これから合わせるので、非同期状態の警告は出さない
     with Repo.open(start, warn_out_of_sync=False) as repo:
         result = repo.sync(
-            allow_missing=args.allow_missing, require_lock=args.require_lock, progress=args.progress
+            allow_missing=args.allow_missing,
+            require_lock=args.require_lock,
+            progress=args.progress,
         )
     if args.json:
         _print_json(args, result)
@@ -785,9 +882,15 @@ def _cmd_git(args: argparse.Namespace, start: Path) -> int:
     if cmd == "install-hooks":
         _log_hooks(result)
     elif cmd == "pin" and result.changed:
-        logger.info("git のコミット %s を版 %d に対応付けました", result.pin.git[:12], result.pin.bvc)
+        logger.info(
+            "git のコミット %s を版 %d に対応付けました",
+            result.pin.git[:12],
+            result.pin.bvc,
+        )
     elif cmd == "pre-commit" and result.auto_commit is not None:
-        logger.info("bvc: 未コミットの変更を版 %d に自動コミットしました", result.auto_commit.id)
+        logger.info(
+            "bvc: 未コミットの変更を版 %d に自動コミットしました", result.auto_commit.id
+        )
     return EXIT_OK
 
 
@@ -822,7 +925,9 @@ def _git_post_checkout(args: argparse.Namespace, start: Path) -> int:
 
 def _log_hooks(r: HooksResult) -> None:
     if r.installed:
-        logger.info("git のフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir)
+        logger.info(
+            "git のフックを設置しました: %s(%s)", ", ".join(r.installed), r.hooks_dir
+        )
     if r.already:
         logger.info("設置済みのフック: %s", ", ".join(r.already))
     for name, line in r.manual.items():
@@ -864,7 +969,9 @@ def format_move(r: MoveResult) -> list[str]:
     if r.skipped:
         lines.append(f"  壊れた版 {', '.join(map(str, r.skipped))} を飛ばしました")
     if r.auto_commit is not None:
-        lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
+        lines.append(
+            f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})"
+        )
     lines += [f"  restored: {p}" for p in r.restored]
     lines += [f"  deleted:  {p}" for p in r.deleted]
     return lines
@@ -877,7 +984,9 @@ def format_sync(r: SyncResult) -> list[str]:
         return [f"変更なし(bvc.lock は現在位置の版 {r.after.at} と同じ内容です)"]
     lines = format_move(r)
     if r.imported is not None:
-        lines.insert(1, f"  bvc.lock の内容から版 {r.imported.id} を作成しました(import)")
+        lines.insert(
+            1, f"  bvc.lock の内容から版 {r.imported.id} を作成しました(import)"
+        )
     return lines
 
 
@@ -903,7 +1012,9 @@ def format_branches(branches: list[BranchInfo]) -> str:
     lines = []
     for b, n in zip(branches, names):
         mark = "*" if b.is_current else " "
-        lines.append(f"{mark} {n}{' ' * (w - _width(n))}  先端 {_or_none(b.tip)}  分岐元 {_or_none(b.fork)}")
+        lines.append(
+            f"{mark} {n}{' ' * (w - _width(n))}  先端 {_or_none(b.tip)}  分岐元 {_or_none(b.fork)}"
+        )
     return "\n".join(lines)
 
 
@@ -912,14 +1023,18 @@ def format_discard(r: DiscardResult) -> list[str]:
     if r.after.at != r.before.at:
         lines.append(f"  版 {r.after.at} に移動しました")
         if r.auto_commit is not None:
-            lines.append(f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})")
+            lines.append(
+                f"  未コミットの変更を版 {r.auto_commit.id} に自動コミットしました({r.auto_commit.message})"
+            )
         lines += [f"  restored: {p}" for p in r.restored]
         lines += [f"  deleted:  {p}" for p in r.deleted]
     return lines
 
 
 def format_gc(r: GcReport) -> str:
-    total = len(r.deleted_commits) + r.deleted_manifests + r.deleted_chunks + r.deleted_tmp
+    total = (
+        len(r.deleted_commits) + r.deleted_manifests + r.deleted_chunks + r.deleted_tmp
+    )
     if total == 0:
         return "削除対象がありません"
     versions = ", ".join(map(str, r.deleted_commits)) or "なし"
@@ -941,12 +1056,16 @@ def format_verify(r: VerifyReport) -> list[str]:
             f"  修復しました: チャンク {len(r.repaired_chunks)}、マニフェスト {len(r.repaired_manifests)}"
         )
     if r.bad_chunks or r.bad_manifests:
-        lines.append(f"  欠損・破損: チャンク {len(r.bad_chunks)}、マニフェスト {len(r.bad_manifests)}")
+        lines.append(
+            f"  欠損・破損: チャンク {len(r.bad_chunks)}、マニフェスト {len(r.bad_manifests)}"
+        )
     if r.ok:
         lines.append("異常はありません")
     else:
         hint = "" if r.repair else "(verify --repair で修復できる場合があります)"
-        lines.append(f"壊れた版があります: {', '.join(map(str, r.broken_commits))}{hint}")
+        lines.append(
+            f"壊れた版があります: {', '.join(map(str, r.broken_commits))}{hint}"
+        )
     return lines
 
 

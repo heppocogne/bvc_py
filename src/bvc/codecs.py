@@ -114,7 +114,9 @@ class ZlibCodec(Codec):
                     out = d.decompress(buf, min(DECODE_BLOCK, limit - total + 1))
                     total += len(out)
                     if total > limit:
-                        raise CorruptData("チャンクを復号したサイズが記録を超えています")
+                        raise CorruptData(
+                            "チャンクを復号したサイズが記録を超えています"
+                        )
                     if out:
                         yield out
                     buf = d.unconsumed_tail

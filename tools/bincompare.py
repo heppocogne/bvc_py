@@ -24,8 +24,20 @@ CHUNKERS: Final[list[dict]] = [
     {"name": "fixed", "size": 1 << 20},  # 1 MiB
     {"name": "fixed", "size": 1 << 22},  # 4 MiB(既定)
     {"name": "fixed", "size": 1 << 24},  # 16 MiB
-    {"name": "gear", "min": 1 << 12, "avg": 1 << 14, "max": 1 << 18, "seed": 0x1234567890abcdef},  # 4KB-16KB
-    {"name": "gear", "min": 1 << 20, "avg": 1 << 22, "max": 1 << 26, "seed": 0xfedcba9876543210},  # 1MB-64MB
+    {
+        "name": "gear",
+        "min": 1 << 12,
+        "avg": 1 << 14,
+        "max": 1 << 18,
+        "seed": 0x1234567890ABCDEF,
+    },  # 4KB-16KB
+    {
+        "name": "gear",
+        "min": 1 << 20,
+        "avg": 1 << 22,
+        "max": 1 << 26,
+        "seed": 0xFEDCBA9876543210,
+    },  # 1MB-64MB
 ]
 
 COMPRESSIONS: Final[list[str]] = ["none", "zlib", "auto"]
@@ -56,7 +68,9 @@ def measure_combination(
     try:
         # init
         start = time.perf_counter()
-        with Repo.init(workdir, track=["data.bin"], chunker=chunker, compression=compression) as repo:
+        with Repo.init(
+            workdir, track=["data.bin"], chunker=chunker, compression=compression
+        ) as repo:
             pass
         elapsed = time.perf_counter() - start
         times.append(elapsed)
@@ -119,18 +133,28 @@ def main():
     print(f"計測対象: chunker {len(CHUNKERS)}, compression {len(COMPRESSIONS)}")
     print()
 
-    chunkers = CHUNKERS if args.chunker is None else [c for c in CHUNKERS if c["name"] == args.chunker]
+    chunkers = (
+        CHUNKERS
+        if args.chunker is None
+        else [c for c in CHUNKERS if c["name"] == args.chunker]
+    )
     compressions = COMPRESSIONS if args.compression is None else [args.compression]
 
     results = []
     for i, chunker in enumerate(chunkers):
         for j, compression in enumerate(compressions):
-            print(f"[{i + 1}/{len(chunkers)} x {j + 1}/{len(compressions)}] ", end="", flush=True)
+            print(
+                f"[{i + 1}/{len(chunkers)} x {j + 1}/{len(compressions)}] ",
+                end="",
+                flush=True,
+            )
             print(f"{chunker['name']} + {compression}...", end="", flush=True)
 
             # 一時フォルダを作成
             with tempfile.TemporaryDirectory() as tmpdir:
-                result = measure_combination(Path(tmpdir), chunker, compression, args.sizes)
+                result = measure_combination(
+                    Path(tmpdir), chunker, compression, args.sizes
+                )
                 results.append(result)
                 if result["error"]:
                     print(f" ERROR: {result['error']}")
@@ -148,14 +172,14 @@ def main():
     for r in results:
         if not r["error"]:
             chunker_name = f"{r['chunker']['name']}"
-            if r['chunker']['name'] == 'fixed':
-                chunker_name += f" ({r['chunker']['size']/(1<<20):.0f}MB)"
-            elif r['chunker']['name'] == 'gear':
-                avg = r['chunker']['avg'] / 1024
+            if r["chunker"]["name"] == "fixed":
+                chunker_name += f" ({r['chunker']['size'] / (1 << 20):.0f}MB)"
+            elif r["chunker"]["name"] == "gear":
+                avg = r["chunker"]["avg"] / 1024
                 chunker_name += f" ({avg:.0f}KB)"
             print(
                 f"{chunker_name:<30} {r['compression']:<12} "
-                f"{r['final_size']/1048576:>10.2f} MB  {r['total_time']:>10.2f}s"
+                f"{r['final_size'] / 1048576:>10.2f} MB  {r['total_time']:>10.2f}s"
             )
 
     if args.output:

@@ -10,7 +10,15 @@ from typing import Final
 from unittest import mock
 
 from bvc import fsutil, worktree
-from bvc.errors import BrokenVersion, BvcError, CorruptData, FileBusy, FileChanging, UnsafePath, UnsupportedFormat
+from bvc.errors import (
+    BrokenVersion,
+    BvcError,
+    CorruptData,
+    FileBusy,
+    FileChanging,
+    UnsafePath,
+    UnsupportedFormat,
+)
 from bvc.model import Config, Head
 from bvc.store import ObjectStore
 from bvc.worktree import Worktree
@@ -32,7 +40,12 @@ class WorktreeTestCase(helpers.TempDirTestCase):
         self.addCleanup(patcher.stop)
 
     def make(self, track, ignore=(), rules=()):
-        return Worktree(self.tmp, self.bvc, Config(track=list(track), ignore=list(ignore), rules=list(rules)), self.store)
+        return Worktree(
+            self.tmp,
+            self.bvc,
+            Config(track=list(track), ignore=list(ignore), rules=list(rules)),
+            self.store,
+        )
 
     def write(self, rel, data=b"x", age=None):
         p = self.tmp / rel
@@ -85,7 +98,9 @@ class TestScan(WorktreeTestCase):
         if not (made or made_file):
             self.skipTest("リンクを作れない環境")
         self.write("real.bin")
-        with self.assertLogs("bvc.worktree", "WARNING") if made_file else _nullcontext():
+        with (
+            self.assertLogs("bvc.worktree", "WARNING") if made_file else _nullcontext()
+        ):
             self.assertEqual(self.wt.scan(), ["real.bin"])
 
     def test_p7_normalization_collision_is_error(self):
@@ -147,8 +162,11 @@ class TestState(WorktreeTestCase):
         # 判定は index に記録した fs_time_ns で行う(今回の走査の時刻ではない)
         p = self.write("a", b"1", age=100)
         m = p.stat().st_mtime_ns
-        index = {"format": 1, "fs_time_ns": m + 1_000_000_000,
-                 "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}}}
+        index = {
+            "format": 1,
+            "fs_time_ns": m + 1_000_000_000,
+            "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}},
+        }
         fsutil.atomic_write_json(self.bvc / "index.json", index, self.bvc / "tmp")
         st = self.wt.state({}, store_chunks=False)
         self.assertNotEqual(st.tree["a"], OTHER_SHA)
@@ -157,8 +175,11 @@ class TestState(WorktreeTestCase):
         # stat キャッシュを使ったファイルも base と比べる
         p = self.write("a", b"1", age=100)
         m = p.stat().st_mtime_ns
-        index = {"format": 1, "fs_time_ns": time.time_ns(),
-                 "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}}}
+        index = {
+            "format": 1,
+            "fs_time_ns": time.time_ns(),
+            "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}},
+        }
         fsutil.atomic_write_json(self.bvc / "index.json", index, self.bvc / "tmp")
         base = {"a": "c" * 64}
         st = self.wt.state(base, store_chunks=False)
@@ -168,8 +189,11 @@ class TestState(WorktreeTestCase):
     def test_cached_manifest_missing_from_store_is_resaved(self):
         p = self.write("a", b"1", age=100)
         m = p.stat().st_mtime_ns
-        index = {"format": 1, "fs_time_ns": time.time_ns(),
-                 "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}}}
+        index = {
+            "format": 1,
+            "fs_time_ns": time.time_ns(),
+            "entries": {"a": {"size": 1, "mtime_ns": m, "manifest": OTHER_SHA}},
+        }
         fsutil.atomic_write_json(self.bvc / "index.json", index, self.bvc / "tmp")
         st = self.wt.state({}, store_chunks=True)
         self.assertNotEqual(st.tree["a"], OTHER_SHA)
@@ -177,7 +201,12 @@ class TestState(WorktreeTestCase):
 
     def test_broken_index_is_rebuilt(self):
         self.write("a", b"1")
-        for content in (b"{", json.dumps({"format": 1, "fs_time_ns": 0, "entries": {"../a": {}}}).encode()):
+        for content in (
+            b"{",
+            json.dumps(
+                {"format": 1, "fs_time_ns": 0, "entries": {"../a": {}}}
+            ).encode(),
+        ):
             with self.subTest(content=content):
                 (self.bvc / "index.json").write_bytes(content)
                 with self.assertLogs("bvc.worktree", "WARNING"):
@@ -187,11 +216,21 @@ class TestState(WorktreeTestCase):
     def test_rules_choose_chunker(self):
         self.write("big/x.bin", b"z" * 100)
         self.write("y.bin", b"z" * 100)
-        rules = [{"pattern": "big/*.bin", "chunker": {"name": "whole"}, "compression": "none"}]
+        rules = [
+            {
+                "pattern": "big/*.bin",
+                "chunker": {"name": "whole"},
+                "compression": "none",
+            }
+        ]
         wt = self.make(["**"], rules=rules)
         st = wt.state({}, store_chunks=True)
-        self.assertEqual(self.store.get_manifest(st.tree["big/x.bin"]).chunker["name"], "whole")
-        self.assertEqual(self.store.get_manifest(st.tree["y.bin"]).chunker["name"], "fixed")
+        self.assertEqual(
+            self.store.get_manifest(st.tree["big/x.bin"]).chunker["name"], "whole"
+        )
+        self.assertEqual(
+            self.store.get_manifest(st.tree["y.bin"]).chunker["name"], "fixed"
+        )
         self.assertEqual(st.total_bytes, 200)
 
 
@@ -208,7 +247,10 @@ class TestBusyFiles(WorktreeTestCase):
                 g.write(b"+")
             return r
 
-        with mock.patch.object(self.store, "hash_file", growing), self.assertRaises(FileChanging):
+        with (
+            mock.patch.object(self.store, "hash_file", growing),
+            self.assertRaises(FileChanging),
+        ):
             self.wt.state({}, store_chunks=False)
         self.assertEqual(len(calls), worktree.RETRY_ATTEMPTS)
 
@@ -275,7 +317,9 @@ class RestoreTestCase(WorktreeTestCase):
 
     def restore(self, **kw):
         current = self.wt.state({}, store_chunks=True)
-        return self.wt.restore(self.tree_b, current, Head(1, 0), self.on_committed, **kw)
+        return self.wt.restore(
+            self.tree_b, current, Head(1, 0), self.on_committed, **kw
+        )
 
     def journal(self):
         return json.loads((self.bvc / "journal.json").read_text("utf-8"))
@@ -283,9 +327,11 @@ class RestoreTestCase(WorktreeTestCase):
     def leave_swapping(self, stage="replace:swap:2"):
         # 置き換えの途中で失敗し、元に戻す処理もできなかった状態(強制終了の代わり)を作る
         before = self.files()
-        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)), \
-                mock.patch.object(Worktree, "_rollback", side_effect=OSError("rollback")), \
-                self.assertRaises(FileBusy):
+        with (
+            mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)),
+            mock.patch.object(Worktree, "_rollback", side_effect=OSError("rollback")),
+            self.assertRaises(FileBusy),
+        ):
             self.restore()
         self.assertEqual(self.journal()["state"], "swapping")
         self.assertNotEqual(self.files(), before)
@@ -295,13 +341,17 @@ class RestoreTestCase(WorktreeTestCase):
 class TestRestore(RestoreTestCase):
     def test_restore_ops_and_index(self):
         r = self.restore()
-        self.assertEqual((r.written, r.deleted), (["a.bin", "b.bin", "e.bin"], ["d/c.bin"]))
+        self.assertEqual(
+            (r.written, r.deleted), (["a.bin", "b.bin", "e.bin"], ["d/c.bin"])
+        )
         self.assertEqual(self.files(), {"a.bin": b"a1", "b.bin": b"b1", "e.bin": b"e1"})
         self.assertEqual(self.heads, [Head(1, 0)])
         self.assertFalse((self.bvc / "journal.json").exists())
         self.assertEqual(list((self.bvc / "txn").iterdir()), [])
         index = json.loads((self.bvc / "index.json").read_text("utf-8"))
-        self.assertEqual({p: e["manifest"] for p, e in index["entries"].items()}, self.tree_b)
+        self.assertEqual(
+            {p: e["manifest"] for p, e in index["entries"].items()}, self.tree_b
+        )
         self.assertFalse(self.wt.state(self.tree_b, store_chunks=False).dirty)
 
     def test_keep_same_content(self):
@@ -350,10 +400,17 @@ class TestRecover(RestoreTestCase):
 
     def test_r3_recover_interrupted_is_idempotent(self):
         before = self.leave_swapping("replace:swap:3")
-        for stage in ("replace:unswap:2", "replace:unstash:1", "txn_cleanup", "remove:journal.json"):
+        for stage in (
+            "replace:unswap:2",
+            "replace:unstash:1",
+            "txn_cleanup",
+            "remove:journal.json",
+        ):
             with self.subTest(stage=stage):
-                with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)), \
-                        self.assertRaises(OSError):
+                with (
+                    mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt(stage)),
+                    self.assertRaises(OSError),
+                ):
                     self.wt.recover(self.on_committed)
                 self.assertTrue((self.bvc / "journal.json").exists())
         with self.assertLogs("bvc.worktree", "WARNING"):
@@ -380,8 +437,11 @@ class TestRecover(RestoreTestCase):
 
     def test_recover_staging_discards(self):
         before = self.files()
-        with mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("stage:2")), \
-                mock.patch.object(Worktree, "_discard_txn"), self.assertRaises(FileBusy):
+        with (
+            mock.patch.object(fsutil, "_fault_hook", helpers.FaultAt("stage:2")),
+            mock.patch.object(Worktree, "_discard_txn"),
+            self.assertRaises(FileBusy),
+        ):
             self.restore()
         self.assertEqual(self.journal()["state"], "staging")
         with self.assertLogs("bvc.worktree", "WARNING"):
@@ -392,11 +452,28 @@ class TestRecover(RestoreTestCase):
     def test_p1_tampered_journal_changes_nothing(self):
         self.leave_swapping()
         good = self.journal()
-        bad_paths = ["../x.bin", "/abs.bin", "C:/x.bin", "//server/x.bin", ".bvc/config.json",
-                     "CON", "", "a\x01.bin", "a\\b.bin"]
-        cases = [("ops.path", p) for p in bad_paths] + [("ops.src", p) for p in bad_paths]
+        bad_paths = [
+            "../x.bin",
+            "/abs.bin",
+            "C:/x.bin",
+            "//server/x.bin",
+            ".bvc/config.json",
+            "CON",
+            "",
+            "a\x01.bin",
+            "a\\b.bin",
+        ]
+        cases = [("ops.path", p) for p in bad_paths] + [
+            ("ops.src", p) for p in bad_paths
+        ]
         cases += [("target", p) for p in bad_paths]
-        cases += [("ops.n", -1), ("ops.n", "0"), ("head.at", 1.5), ("ops.sha", "../" + "a" * 61), ("state", "x")]
+        cases += [
+            ("ops.n", -1),
+            ("ops.n", "0"),
+            ("head.at", 1.5),
+            ("ops.sha", "../" + "a" * 61),
+            ("state", "x"),
+        ]
         work = helpers.tree_hashes(self.tmp)
         txn = helpers.tree_hashes(self.bvc / "txn", exclude=())
         config = helpers.tree_hashes(self.bvc, exclude=("txn", "tmp"))
@@ -423,7 +500,9 @@ class TestRecover(RestoreTestCase):
                     self.wt.recover(self.on_committed)
                 self.assertEqual(helpers.tree_hashes(self.tmp), work)
                 self.assertEqual(helpers.tree_hashes(self.bvc / "txn", exclude=()), txn)
-                self.assertEqual(helpers.tree_hashes(self.bvc, exclude=("txn", "tmp")), config)
+                self.assertEqual(
+                    helpers.tree_hashes(self.bvc, exclude=("txn", "tmp")), config
+                )
         self.assertEqual(self.heads, [])
         fsutil.atomic_write_json(self.bvc / "journal.json", good, self.bvc / "tmp")
         with self.assertLogs("bvc.worktree", "WARNING"):
@@ -453,7 +532,11 @@ class TestIndexCheck(WorktreeTestCase):
         self.wt.update_index(st.tree, st.fs_time_ns)
         self.assertIsNone(self.wt.check_index())
         index = self.bvc / "index.json"
-        for content in (b"", b"{", b'{"format":1,"fs_time_ns":0,"entries":{"../x":{}}}'):
+        for content in (
+            b"",
+            b"{",
+            b'{"format":1,"fs_time_ns":0,"entries":{"../x":{}}}',
+        ):
             with self.subTest(content=content):
                 index.write_bytes(content)
                 self.assertIsNotNone(self.wt.check_index())
@@ -470,12 +553,14 @@ class TestRepairCandidates(WorktreeTestCase):
     def test_tracked_and_untracked_by_name_or_size(self):
         wt = self.make(["*.bin"])
         self.write("a.bin", b"1")
-        self.write("sub/a.bin", b"22")      # パターン外・名前が一致
-        self.write("sub/A.BIN.x", b"22")    # 名前が違う
-        self.write("x.dat", b"333")         # サイズが一致
+        self.write("sub/a.bin", b"22")  # パターン外・名前が一致
+        self.write("sub/A.BIN.x", b"22")  # 名前が違う
+        self.write("x.dat", b"333")  # サイズが一致
         self.write("y.dat", b"4444")
         (self.bvc / "a.bin").write_bytes(b"1")  # .bvc の中は見ない
-        self.assertEqual(wt.repair_candidates({"A.bin"}, {3}), ["a.bin", "sub/a.bin", "x.dat"])
+        self.assertEqual(
+            wt.repair_candidates({"A.bin"}, {3}), ["a.bin", "sub/a.bin", "x.dat"]
+        )
         if helpers.try_symlink(self.tmp / "y.dat", self.tmp / "link.dat"):
             self.assertNotIn("link.dat", wt.repair_candidates(set(), {4}))
 

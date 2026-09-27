@@ -120,7 +120,9 @@ class TestCommands(CliTestCase):
         code, out, _ = self.bvc("--json", "commit")
         self.assertEqual(code, 3)
         data = json.loads(out)
-        self.assertEqual((data["type"], data["details"]["missing"]), ("MissingFiles", ["a"]))
+        self.assertEqual(
+            (data["type"], data["details"]["missing"]), ("MissingFiles", ["a"])
+        )
 
 
 class TestRename(CliTestCase):
@@ -147,7 +149,9 @@ class TestRename(CliTestCase):
                 self.assertEqual(json.loads(out)["type"], "UsageError")
 
     def test_f6_similarity_shown_as_percent(self):
-        Repo.init(self.tmp, track=["*.bin"], chunker={"name": "fixed", "size": 1024}).close()
+        Repo.init(
+            self.tmp, track=["*.bin"], chunker={"name": "fixed", "size": 1024}
+        ).close()
         self.write("a.bin", b"x" * 3072 + b"a" * 1024)
         self.bvc("commit")
         (self.tmp / "a.bin").unlink()
@@ -162,9 +166,14 @@ class TestRename(CliTestCase):
         (self.tmp / "result.bin").rename(self.tmp / "result.bin.tmp")
         code, _, err = self.bvc("commit")
         self.assertEqual(code, 3)
-        self.assertIn("  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp\n", err)
+        self.assertIn(
+            "  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp\n",
+            err,
+        )
         code, out, _ = self.bvc("--json", "log")
-        self.assertEqual(json.loads(out)["uncommitted"]["hints"], {"result.bin": ["result.bin.tmp"]})
+        self.assertEqual(
+            json.loads(out)["uncommitted"]["hints"], {"result.bin": ["result.bin.tmp"]}
+        )
 
 
 class TestMoveCommands(CliTestCase):
@@ -219,7 +228,10 @@ class TestMoveCommands(CliTestCase):
         data = json.loads(out)
         self.assertEqual(code, 0)
         self.assertIs(data["changed"], True)
-        self.assertEqual((data["before"], data["after"]), ({"at": 1, "branch": 0}, {"at": 0, "branch": 0}))
+        self.assertEqual(
+            (data["before"], data["after"]),
+            ({"at": 1, "branch": 0}, {"at": 0, "branch": 0}),
+        )
         self.assertEqual(data["restored"], ["a.bin"])
 
     def test_f7_missing_on_move(self):
@@ -251,7 +263,9 @@ class TestLogTree(CliTestCase):
         self.assertEqual(code, 0)
         lines = out.splitlines()
         self.assertEqual(lines[0], "未コミットの変更: a (modified)")
-        self.assertEqual([ln.split("  ")[0] for ln in lines[1:]], ["@", "│ ○", "├─╯", "○", "○"])
+        self.assertEqual(
+            [ln.split("  ")[0] for ln in lines[1:]], ["@", "│ ○", "├─╯", "○", "○"]
+        )
         self.assertTrue(lines[1].endswith("three"))
         self.assertTrue(lines[2].endswith("two"))
 
@@ -283,7 +297,9 @@ class TestHistoryCommands(CliTestCase):
 
     def notes(self):
         code, out, _ = self.bvc("--json", "log", "--discarded")
-        return {e["id"]: [n["text"] for n in e["notes"]] for e in json.loads(out)["entries"]}
+        return {
+            e["id"]: [n["text"] for n in e["notes"]] for e in json.loads(out)["entries"]
+        }
 
     def test_f14_note_forms(self):
         code, out, _ = self.bvc("note", "-m", "2")
@@ -310,9 +326,13 @@ class TestHistoryCommands(CliTestCase):
         self.bvc("commit", "-m", "c3")
         self.assertEqual(self.bvc("branch", "name", "本線", "2")[0], 0)
         code, out, _ = self.bvc("branch")
-        self.assertEqual(out, "  本線        先端 2  分岐元 なし\n* (名前なし)  先端 3  分岐元 1\n")
+        self.assertEqual(
+            out, "  本線        先端 2  分岐元 なし\n* (名前なし)  先端 3  分岐元 1\n"
+        )
         code, out, _ = self.bvc("--json", "branch")
-        self.assertEqual([b["name"] for b in json.loads(out)["branches"]], ["本線", None])
+        self.assertEqual(
+            [b["name"] for b in json.loads(out)["branches"]], ["本線", None]
+        )
         self.assertEqual(self.bvc("goto", "本線")[0], 0)
         code, out, _ = self.bvc("branch", "unname", "本線")
         self.assertIn("名前 '本線' を外しました", out)
@@ -347,7 +367,6 @@ class TestHistoryCommands(CliTestCase):
         self.assertEqual((code, json.loads(out)["discarded"]), (0, 2))
 
 
-
 class TestCorruptionCommands(CliTestCase):
     # M4-8, M4-9, M4-11(仕様書 2.9節・3.4節・3.10節)。観点: F-1, F-12, C-2, C-6。
 
@@ -372,7 +391,9 @@ class TestCorruptionCommands(CliTestCase):
         self.assertIn("異常はありません", out)
         code, out, _ = self.bvc("--json", "verify", "--quick")
         data = json.loads(out)
-        self.assertEqual((code, data["ok"], data["changed"], data["quick"]), (0, True, False, True))
+        self.assertEqual(
+            (code, data["ok"], data["changed"], data["quick"]), (0, True, False, True)
+        )
 
     def test_f12_verify_exit_code_and_repair(self):
         self.break_version(1)
@@ -408,7 +429,6 @@ class TestCorruptionCommands(CliTestCase):
         self.assertEqual((code, data["after"]["at"], data["skipped"]), (0, 2, [1]))
 
 
-
 # ---------------------------------------------------------------------------
 # M5: --json・終了コード・進捗・警告・文字コード
 # ---------------------------------------------------------------------------
@@ -416,7 +436,11 @@ class TestCorruptionCommands(CliTestCase):
 
 def _keys(cls) -> set[str]:
     # --json の出力のキー: フィールド + 公開のプロパティ + warnings
-    return {f.name for f in dataclasses.fields(cls)} | set(cli._public_properties(cls)) | {"warnings"}
+    return (
+        {f.name for f in dataclasses.fields(cls)}
+        | set(cli._public_properties(cls))
+        | {"warnings"}
+    )
 
 
 class TestToJsonable(unittest.TestCase):
@@ -441,9 +465,17 @@ class TestToJsonable(unittest.TestCase):
             {"1": str(Path("x/y")), "s": ["a", "b"]},
         )
         v = VerifyReport(
-            changed=False, quick=True, repair=False, checked_chunks=0, checked_manifests=0,
-            checked_commits=0, bad_chunks=[], bad_manifests=[], broken_commits=[3],
-            repaired_chunks=[], repaired_manifests=[],
+            changed=False,
+            quick=True,
+            repair=False,
+            checked_chunks=0,
+            checked_manifests=0,
+            checked_commits=0,
+            bad_chunks=[],
+            bad_manifests=[],
+            broken_commits=[3],
+            repaired_chunks=[],
+            repaired_manifests=[],
         )
         self.assertIs(cli.to_jsonable(v)["ok"], False)
 
@@ -463,7 +495,9 @@ class TestJsonAllCommands(CliTestCase):
     def test_f11_all_commands(self):
         self.write("a.bin", b"v0")
         data = self.json_cmd("init", "--track", "*.bin")
-        self.assertEqual(set(data), {"changed", "workdir", "commit", "hooks", "warnings"})
+        self.assertEqual(
+            set(data), {"changed", "workdir", "commit", "hooks", "warnings"}
+        )
         self.assertIsNone(data["hooks"])  # --git なし
         self.assertEqual(data["workdir"], str(self.tmp))
         with Repo.open(self.tmp) as repo:
@@ -480,7 +514,8 @@ class TestJsonAllCommands(CliTestCase):
         data = self.json_cmd("note", "-m", "メモ")
         self.assertEqual(set(data["note"]), {f.name for f in dataclasses.fields(Note)})
         self.assertEqual(
-            (data["changed"], data["note"]["commit_id"], data["note"]["text"]), (True, 1, "メモ")
+            (data["changed"], data["note"]["commit_id"], data["note"]["text"]),
+            (True, 1, "メモ"),
         )
 
         data = self.json_cmd("undo")
@@ -493,7 +528,9 @@ class TestJsonAllCommands(CliTestCase):
         self.json_cmd("commit", "-m", "two")
 
         data = self.json_cmd("branch", "name", "本線", "1")
-        self.assertEqual(set(data["branch"]), {f.name for f in dataclasses.fields(BranchInfo)})
+        self.assertEqual(
+            set(data["branch"]), {f.name for f in dataclasses.fields(BranchInfo)}
+        )
         data = self.json_cmd("branch")
         with Repo.open(self.tmp) as repo:
             self.assertEqual(data["branches"], cli.to_jsonable(repo.branches()))
@@ -502,10 +539,14 @@ class TestJsonAllCommands(CliTestCase):
 
         self.write("a.bin", b"dirty")
         data = self.json_cmd("log", "--discarded")
-        self.assertEqual(set(data), {"changed", "uncommitted", "entries", "lock_status", "warnings"})
+        self.assertEqual(
+            set(data), {"changed", "uncommitted", "entries", "lock_status", "warnings"}
+        )
         self.assertEqual(data["lock_status"], "disabled")
         with Repo.open(self.tmp) as repo:
-            self.assertEqual(data["entries"], cli.to_jsonable(repo.log(include_discarded=True)))
+            self.assertEqual(
+                data["entries"], cli.to_jsonable(repo.log(include_discarded=True))
+            )
             expected = cli.to_jsonable(repo.work_state())
         # 走査の時刻は呼ぶたびに変わる
         for d in (data["uncommitted"], expected):
@@ -517,7 +558,8 @@ class TestJsonAllCommands(CliTestCase):
         self.assertEqual((set(data), data["discarded"]), (_keys(DiscardResult), 1))
         data = self.json_cmd("gc", "--dry-run")
         self.assertEqual(
-            (set(data), data["changed"], data["deleted_commits"]), (_keys(GcReport), False, [1])
+            (set(data), data["changed"], data["deleted_commits"]),
+            (_keys(GcReport), False, [1]),
         )
         data = self.json_cmd("gc")
         self.assertEqual((data["changed"], data["deleted_commits"]), (True, [1]))
@@ -540,11 +582,15 @@ class TestJsonAllCommands(CliTestCase):
         self.write("a.bin", b"y")
         data = self.json_cmd("commit")
         self.assertIs(data["changed"], True)
-        self.assertTrue(any("branches.json" in w for w in data["warnings"]), data["warnings"])
+        self.assertTrue(
+            any("branches.json" in w for w in data["warnings"]), data["warnings"]
+        )
 
     def test_f11_error_json(self):
         data = self.json_cmd("log", code=1)
-        self.assertEqual(set(data), {"changed", "error", "type", "exit_code", "details", "warnings"})
+        self.assertEqual(
+            set(data), {"changed", "error", "type", "exit_code", "details", "warnings"}
+        )
         self.assertEqual((data["changed"], data["exit_code"]), (False, 1))
         self.assertIn("リポジトリが見つかりません", data["error"])
 
@@ -603,7 +649,8 @@ class TestExitCodesAllCommands(CliTestCase):
                 self.assertEqual((code, err), (2, ""))
                 data = json.loads(out)
                 self.assertEqual(
-                    (data["type"], data["exit_code"], data["changed"]), ("UsageError", 2, False)
+                    (data["type"], data["exit_code"], data["changed"]),
+                    ("UsageError", 2, False),
                 )
 
     def test_f12_no_repo_is_1(self):
@@ -690,17 +737,26 @@ class TestProgress(CliTestCase):
             finally:
                 cli.setup_logging()
         line = "保存 a.bin: 10 B / 100 B (10%)"
-        self.assertEqual(err.getvalue(), f"\r{line}\r{' ' * cli._width(line)}\r警告: 注意\n")
+        self.assertEqual(
+            err.getvalue(), f"\r{line}\r{' ' * cli._width(line)}\r警告: 注意\n"
+        )
 
 
 class TestProgressView(unittest.TestCase):
     def test_format(self):
         self.assertEqual(
-            cli.format_progress(ProgressEvent("put", 1024, 2048, "a")), "保存 a: 1.0 KiB / 2.0 KiB (50%)"
+            cli.format_progress(ProgressEvent("put", 1024, 2048, "a")),
+            "保存 a: 1.0 KiB / 2.0 KiB (50%)",
         )
-        self.assertEqual(cli.format_progress(ProgressEvent("gc", 3, 4)), "削除: 3/4 (75%)")
-        self.assertEqual(cli.format_progress(ProgressEvent("new_stage", 3)), "new_stage: 3")
-        self.assertEqual(cli.format_progress(ProgressEvent("restore", 0, 0)), "置き換え: 0/0")
+        self.assertEqual(
+            cli.format_progress(ProgressEvent("gc", 3, 4)), "削除: 3/4 (75%)"
+        )
+        self.assertEqual(
+            cli.format_progress(ProgressEvent("new_stage", 3)), "new_stage: 3"
+        )
+        self.assertEqual(
+            cli.format_progress(ProgressEvent("restore", 0, 0)), "置き換え: 0/0"
+        )
 
     def test_throttle_and_clear(self):
         s = _Tty()
@@ -761,6 +817,7 @@ class TestEncoding(CliTestCase):
         self.assertEqual(cli._fallback("✗ ╯ ├─┼│ ○ →", Ascii()), "x / |-+| o ->")
         self.assertEqual(cli._fallback("✗╯├", Sjis()), "×┘├")
         self.assertEqual(cli._fallback("✗", io.StringIO()), "✗")
+
 
 if __name__ == "__main__":
     unittest.main()

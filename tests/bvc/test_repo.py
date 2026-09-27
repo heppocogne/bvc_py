@@ -77,7 +77,10 @@ class TestInit(RepoTestCase):
         for sha in c0.tree.values():
             self.assertTrue(repo._store.manifest_ok(sha, "full"))
         # 保存データは .bvc の中だけに書く
-        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), [".bvc", "a.bin", "note.txt", "sub"])
+        self.assertEqual(
+            sorted(p.name for p in self.tmp.iterdir()),
+            [".bvc", "a.bin", "note.txt", "sub"],
+        )
         self.assertEqual(repo._history.head(), Head(0, 0))
 
     def test_empty_warns(self):
@@ -92,8 +95,11 @@ class TestInit(RepoTestCase):
                 Repo.init(target, track=["*"])
 
     def test_invalid_config_creates_nothing(self):
-        for kw in ({"track": []}, {"track": ["*"], "compression": "lzma"},
-                   {"track": ["*"], "chunker": {"name": "fixed", "size": 0}}):
+        for kw in (
+            {"track": []},
+            {"track": ["*"], "compression": "lzma"},
+            {"track": ["*"], "chunker": {"name": "fixed", "size": 0}},
+        ):
             with self.subTest(kw=kw), self.assertRaises(UsageError):
                 Repo.init(self.tmp, **kw)
             self.assertFalse((self.tmp / ".bvc").exists())
@@ -111,33 +117,69 @@ class TestInit(RepoTestCase):
 class TestConfig(unittest.TestCase):
     def test_i17_invalid_values(self):
         base = {"format": 1, "track": ["*"]}
-        for patch in ({"track": "x"}, {"ignore": [1]}, {"chunker": {"name": "nope"}},
-                      {"compression": "x"}, {"threads": -1}, {"commit_verify": "x"},
-                      {"rules": [{"chunker": {"name": "whole"}}]},
-                      {"rules": [{"pattern": "*", "compression": "x"}]},
-                      {"rename_threshold": 0}, {"rename_threshold": 1.5},
-                      {"rename_threshold": "0.5"}, {"rename_threshold": True}):
+        for patch in (
+            {"track": "x"},
+            {"ignore": [1]},
+            {"chunker": {"name": "nope"}},
+            {"compression": "x"},
+            {"threads": -1},
+            {"commit_verify": "x"},
+            {"rules": [{"chunker": {"name": "whole"}}]},
+            {"rules": [{"pattern": "*", "compression": "x"}]},
+            {"rename_threshold": 0},
+            {"rename_threshold": 1.5},
+            {"rename_threshold": "0.5"},
+            {"rename_threshold": True},
+        ):
             with self.subTest(patch=patch), self.assertRaises(UsageError):
                 parse_config({**base, **patch})
         self.assertEqual(parse_config(base).chunker["name"], "fixed")
         self.assertEqual(parse_config(base).rename_threshold, 0.5)
-        self.assertEqual(parse_config({**base, "rename_threshold": 1}).rename_threshold, 1.0)
+        self.assertEqual(
+            parse_config({**base, "rename_threshold": 1}).rename_threshold, 1.0
+        )
 
     def test_git_config(self):
         # M6: git の設定。bvc.lock が追跡パターンに一致するのは、git 連携が有効なときだけエラー
         base = {"format": 1, "track": ["*.bin"]}
-        for git in ("x", {"enabled": 1}, {"enabled": True, "lock_file": "../bvc.lock"},
-                    {"enabled": True, "lock_file": ".bvc/x"}, {"enabled": True, "lock_file": ""},
-                    {"enabled": True, "pre_commit": "x"}, {"enabled": True, "lock_file": "a.bin"}):
+        for git in (
+            "x",
+            {"enabled": 1},
+            {"enabled": True, "lock_file": "../bvc.lock"},
+            {"enabled": True, "lock_file": ".bvc/x"},
+            {"enabled": True, "lock_file": ""},
+            {"enabled": True, "pre_commit": "x"},
+            {"enabled": True, "lock_file": "a.bin"},
+        ):
             with self.subTest(git=git), self.assertRaises(UsageError):
                 parse_config({**base, "git": git})
         self.assertFalse(parse_config(base).git.enabled)
-        self.assertEqual(parse_config({"format": 1, "track": ["*"]}).git.lock_file, "bvc.lock")
-        g = parse_config({**base, "git": {"enabled": True, "lock_file": "sub/x.lock", "pre_commit": "reject"}}).git
-        self.assertEqual((g.enabled, g.lock_file, g.pre_commit), (True, "sub/x.lock", "reject"))
+        self.assertEqual(
+            parse_config({"format": 1, "track": ["*"]}).git.lock_file, "bvc.lock"
+        )
+        g = parse_config(
+            {
+                **base,
+                "git": {
+                    "enabled": True,
+                    "lock_file": "sub/x.lock",
+                    "pre_commit": "reject",
+                },
+            }
+        ).git
+        self.assertEqual(
+            (g.enabled, g.lock_file, g.pre_commit), (True, "sub/x.lock", "reject")
+        )
         with self.assertRaises(UsageError):
             parse_config({"format": 1, "track": ["*"], "git": {"enabled": True}})
-        parse_config({"format": 1, "track": ["*"], "ignore": ["bvc.lock"], "git": {"enabled": True}})
+        parse_config(
+            {
+                "format": 1,
+                "track": ["*"],
+                "ignore": ["bvc.lock"],
+                "git": {"enabled": True},
+            }
+        )
 
 
 class TestCommit(RepoTestCase):
@@ -269,7 +311,10 @@ class TestCommitFaults(RepoTestCase):
                 repo = Repo.init(self.tmp, track=["**"])
                 self.write("a", helpers.random_bytes(1000, seed=len(stage)))
                 hook = _PrefixFault(stage)
-                with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(Exception):
+                with (
+                    mock.patch.object(fsutil, "_fault_hook", hook),
+                    self.assertRaises(Exception),
+                ):
                     repo.commit("first")
                 self.assertEqual(hook.seen, 1, "段階が呼ばれていない")
                 repo.close()
@@ -363,7 +408,10 @@ class TestUndoRedoGoto(MoveTestCase):
         self.assert_clean_at(repo, 1)
         ops = self.oplog(repo)
         self.assertEqual([o["op"] for o in ops], ["init", "commit", "undo", "redo"])
-        self.assertEqual((ops[2]["reason"], ops[2]["after"], ops[2]["created"]), ("確認", {"at": 0, "branch": 0}, []))
+        self.assertEqual(
+            (ops[2]["reason"], ops[2]["after"], ops[2]["created"]),
+            ("確認", {"at": 0, "branch": 0}, []),
+        )
 
     def test_f12_undo_at_root_and_redo_at_tip(self):
         repo = self.build_linear(1)
@@ -372,7 +420,9 @@ class TestUndoRedoGoto(MoveTestCase):
             repo.redo()
         self.assertEqual(cm.exception.exit_code, 4)
         repo.undo()
-        self.write("a.bin", b"edit")  # 移動できない場合は、未コミットの変更があっても何も作らない
+        self.write(
+            "a.bin", b"edit"
+        )  # 移動できない場合は、未コミットの変更があっても何も作らない
         with self.assertRaises(CannotMove):
             repo.undo()
         self.assertEqual(len(commit_files(repo.bvc_dir)), 2)
@@ -381,10 +431,10 @@ class TestUndoRedoGoto(MoveTestCase):
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit")
 
     def test_f3_roundtrip_with_branch(self):
-        repo = self.build_linear(2)          # 0 - 1 - 2(ブランチ 0)
-        repo.undo()                          # @ = 1
+        repo = self.build_linear(2)  # 0 - 1 - 2(ブランチ 0)
+        repo.undo()  # @ = 1
         self.write("a.bin", b"v3")
-        r = repo.commit("c3")                # 1 - 3(ブランチ 1)
+        r = repo.commit("c3")  # 1 - 3(ブランチ 1)
         self.assertTrue(r.new_branch)
         self.assertEqual(self.head(repo), Head(3, 1))
         # undo → redo は元のブランチ(1)の方向へ戻る
@@ -411,7 +461,9 @@ class TestUndoRedoGoto(MoveTestCase):
         self.write("new.bin", b"n")
         r = repo.undo()
         auto = r.auto_commit
-        self.assertEqual((auto.kind, auto.message, auto.parent), ("auto", "auto: before undo", 1))
+        self.assertEqual(
+            (auto.kind, auto.message, auto.parent), ("auto", "auto: before undo", 1)
+        )
         self.assertEqual(r.after, Head(0, auto.branch))
         self.assertEqual(self.files(), {"a.bin": b"v0"})
         self.assertEqual(self.oplog(repo)[-1]["created"], [auto.id])
@@ -426,7 +478,7 @@ class TestUndoRedoGoto(MoveTestCase):
 
     def test_f4_auto_commit_with_children_makes_new_branch(self):
         repo = self.build_linear(2)
-        repo.undo()                          # @ = 1(子 2 がある)
+        repo.undo()  # @ = 1(子 2 がある)
         self.write("a.bin", b"edit")
         r = repo.redo()
         self.assertTrue(r.auto_commit.branch != 0)
@@ -469,7 +521,7 @@ class TestUndoRedoGoto(MoveTestCase):
         repo = self.build_linear(1)
         repo.goto("0")
         self.write("a.bin", b"x")
-        repo.commit("x")                     # 0 の子は 1 と 2
+        repo.commit("x")  # 0 の子は 1 と 2
         repo._history.set_head(Head(0, 99))  # 経路上に無い状態を作る
         self.write("a.bin", b"v0")
         with self.assertRaises(CannotMove) as cm:
@@ -541,7 +593,10 @@ class TestMoveSafety(MoveTestCase):
         repo = self.build_linear(1)
         self.write("a.bin", b"edit")
         hook = helpers.FaultAt("replace:swap:0")
-        with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(FileBusy) as cm:
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(FileBusy) as cm,
+        ):
             repo.undo()
         self.assertEqual(cm.exception.exit_code, 3)
         auto_id = 2
@@ -584,19 +639,27 @@ class TestMoveSafety(MoveTestCase):
                 try:
                     before = self.files()
                     hook = helpers.FaultAt(stage, count=count)
-                    with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(BvcError):
+                    with (
+                        mock.patch.object(fsutil, "_fault_hook", hook),
+                        self.assertRaises(BvcError),
+                    ):
                         repo.goto("0")
                     self.assertEqual(self.files(), before)
                     self.assert_clean_at(repo, 2)
                     repo.goto("0")  # やり直せる
-                    self.assertEqual(self.files(), {"a.bin": b"a0", "b.bin": b"b0", "d/c.bin": b"c0"})
+                    self.assertEqual(
+                        self.files(), {"a.bin": b"a0", "b.bin": b"b0", "d/c.bin": b"c0"}
+                    )
                 finally:
                     repo.close()
 
     def test_fault_after_swapped_completes_on_next_open(self):
         repo = self.build_linear(1)
         hook = helpers.FaultAt("atomic_write:HEAD.json")
-        with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(BvcError):
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(BvcError),
+        ):
             repo.undo()
         self.assertTrue((repo.bvc_dir / "journal.json").exists())
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v0")
@@ -605,7 +668,10 @@ class TestMoveSafety(MoveTestCase):
         self.assert_clean_at(repo, 0)
 
     def test_i19_restored_files_are_rehashed_next_time(self):
-        self.write("a.bin", b"1", )
+        self.write(
+            "a.bin",
+            b"1",
+        )
         self.write("b.bin", b"b")
         repo = self.init(["**/*.bin"])
         self.write("a.bin", b"2")
@@ -615,10 +681,14 @@ class TestMoveSafety(MoveTestCase):
         ent = index["entries"]["a.bin"]
         self.assertEqual(ent["manifest"], repo._history.get(0).tree["a.bin"])
         # 復元したファイルは stat キャッシュの条件(mtime < fs_time - 2秒)を満たさない
-        self.assertGreaterEqual(ent["mtime_ns"], index["fs_time_ns"] - worktree.FS_TIME_MARGIN_NS)
+        self.assertGreaterEqual(
+            ent["mtime_ns"], index["fs_time_ns"] - worktree.FS_TIME_MARGIN_NS
+        )
         calls = []
         orig = repo._store.hash_file
-        with mock.patch.object(repo._store, "hash_file", lambda f, *a: calls.append(f.name) or orig(f, *a)):
+        with mock.patch.object(
+            repo._store, "hash_file", lambda f, *a: calls.append(f.name) or orig(f, *a)
+        ):
             self.assertFalse(repo.work_state().dirty)
         self.assertTrue(any(c.endswith("a.bin") for c in calls))
 
@@ -703,7 +773,10 @@ class TestMoveSafety(MoveTestCase):
                         with open(self.tmp / "a.bin", "ab") as f:
                             f.write(b"+late")
 
-                with mock.patch.object(fsutil, "_fault_hook", touch), self.assertRaises(FileChanging):
+                with (
+                    mock.patch.object(fsutil, "_fault_hook", touch),
+                    self.assertRaises(FileChanging),
+                ):
                     repo.undo()
                 self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit+late")
                 self.assertEqual(self.head(repo).at, 2)
@@ -714,14 +787,18 @@ class TestMoveSafety(MoveTestCase):
     def test_r6_disk_full(self):
         repo = self.build_linear(1)
         usage = shutil.disk_usage(self.tmp)._replace(free=10)
-        with mock.patch.object(worktree.shutil, "disk_usage", return_value=usage), \
-                self.assertRaises(DiskFull) as cm:
+        with (
+            mock.patch.object(worktree.shutil, "disk_usage", return_value=usage),
+            self.assertRaises(DiskFull) as cm,
+        ):
             repo.undo()
         self.assertEqual(cm.exception.exit_code, 3)
         self.assert_clean_at(repo, 1)
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v1")
 
-    @unittest.skipUnless(os.name == "nt", "Windows の排他(開いているファイルは置き換えられない)")
+    @unittest.skipUnless(
+        os.name == "nt", "Windows の排他(開いているファイルは置き換えられない)"
+    )
     def test_r4_file_in_use(self):
         self.write("a.bin", b"a0")
         self.write("b.bin", b"b0")
@@ -737,6 +814,7 @@ class TestMoveSafety(MoveTestCase):
         self.assert_clean_at(repo, 1)
         repo.undo()
         self.assertEqual(self.files(), {"a.bin": b"a0", "b.bin": b"b0"})
+
 
 # ---------------------------------------------------------------------------
 # M4-A: 履歴操作(note / branch / discard / gc)
@@ -755,17 +833,27 @@ class HistoryOpsTestCase(MoveTestCase):
     def pin(self, repo, commit_id):
         fsutil.append_jsonl(
             repo.bvc_dir / "pins.jsonl",
-            {"format": 1, "time": "t", "git": "a" * 40, "bvc": commit_id, "tree_hash": "b" * 64},
+            {
+                "format": 1,
+                "time": "t",
+                "git": "a" * 40,
+                "bvc": commit_id,
+                "tree_hash": "b" * 64,
+            },
         )
 
     def notes(self, repo):
-        return {e.id: [n.text for n in e.notes] for e in repo.log(include_discarded=True)}
+        return {
+            e.id: [n.text for n in e.notes] for e in repo.log(include_discarded=True)
+        }
 
 
 class TestNote(HistoryOpsTestCase):
     def test_f14_targets_and_order(self):
         repo = self.build_linear(2)
-        self.assertEqual(repo.note("2").commit_id, 2)  # 本文が数字でも版番号と取り違えない
+        self.assertEqual(
+            repo.note("2").commit_id, 2
+        )  # 本文が数字でも版番号と取り違えない
         repo.note("2 回目")
         repo.note("x", rev="1")
         repo.note("y", rev="@-")
@@ -789,7 +877,11 @@ class TestNote(HistoryOpsTestCase):
     def test_errors_write_nothing(self):
         repo = self.build_linear(1)
         repo.discard("0")
-        for text, rev, exc in (("", "@", UsageError), ("x", "9", RevisionError), ("x", "0", RevisionError)):
+        for text, rev, exc in (
+            ("", "@", UsageError),
+            ("x", "9", RevisionError),
+            ("x", "0", RevisionError),
+        ):
             with self.subTest(text=text, rev=rev), self.assertRaises(exc):
                 repo.note(text, rev=rev)
         self.assertEqual(list((repo.bvc_dir / "notes").iterdir()), [])
@@ -814,7 +906,9 @@ class TestBranchOps(HistoryOpsTestCase):
 
     def test_f1_name_and_reassign(self):
         repo = self.build_branchy()
-        self.assertEqual(repo.name_branch("main", "2"), BranchInfo(0, "main", 2, None, False))
+        self.assertEqual(
+            repo.name_branch("main", "2"), BranchInfo(0, "main", 2, None, False)
+        )
         repo.name_branch("feat")
         repo.goto("main")
         self.assertEqual(self.head(repo), Head(2, 0))
@@ -858,7 +952,9 @@ class TestDiscard(HistoryOpsTestCase):
         r = repo.discard("1")
         self.assertEqual((r.discarded, r.before, r.after), (1, Head(3, 0), Head(3, 0)))
         self.assertEqual([e.id for e in repo.log()], [3, 2, 0])
-        self.assertTrue(next(e for e in repo.log(include_discarded=True) if e.id == 1).discarded)
+        self.assertTrue(
+            next(e for e in repo.log(include_discarded=True) if e.id == 1).discarded
+        )
         repo.undo()
         repo.undo()
         self.assert_clean_at(repo, 0)
@@ -885,14 +981,19 @@ class TestDiscard(HistoryOpsTestCase):
     def test_f8_current_moves_to_parent(self):
         repo = self.build_linear(2)
         r = repo.discard()
-        self.assertEqual((r.after, r.restored, r.auto_commit), (Head(1, 0), ["a.bin"], None))
+        self.assertEqual(
+            (r.after, r.restored, r.auto_commit), (Head(1, 0), ["a.bin"], None)
+        )
         self.assert_clean_at(repo, 1)
         self.assertEqual(self.files(), {"a.bin": b"v1"})
         self.assertTrue(repo._history.is_discarded(2))
         with self.assertRaises(CannotMove):  # 2 は消えたので 1 が先端
             repo.redo()
         last = self.oplog(repo)[-1]
-        self.assertEqual((last["op"], last["after"], last["result"]), ("discard", {"at": 1, "branch": 0}, "ok"))
+        self.assertEqual(
+            (last["op"], last["after"], last["result"]),
+            ("discard", {"at": 1, "branch": 0}, "ok"),
+        )
 
     def test_f8_current_with_changes_keeps_work(self):
         repo = self.build_linear(2)
@@ -901,7 +1002,9 @@ class TestDiscard(HistoryOpsTestCase):
         auto = r.auto_commit
         self.assertEqual((auto.parent, auto.message), (2, "auto: before discard"))
         self.assertEqual(r.after, Head(1, auto.branch))
-        self.assertEqual(repo._history.effective_parent(auto.id), 1)  # 消した版の子はつなぎ直される
+        self.assertEqual(
+            repo._history.effective_parent(auto.id), 1
+        )  # 消した版の子はつなぎ直される
         self.assert_clean_at(repo, 1)
         repo.redo()  # 作業内容(自動コミット)に戻れる
         self.assertEqual(self.files(), {"a.bin": b"edit"})
@@ -947,7 +1050,10 @@ class TestDiscard(HistoryOpsTestCase):
         repo = self.build_linear(2)
         self.write("a.bin", b"edit")
         hook = helpers.FaultAt("replace:swap:0")
-        with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(FileBusy):
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(FileBusy),
+        ):
             repo.discard()
         self.assertFalse(repo._history.is_discarded(2))
         self.assert_clean_at(repo, 3)  # HEAD は自動コミット(I-18)
@@ -984,7 +1090,11 @@ class TestDiscard(HistoryOpsTestCase):
 class TestGc(HistoryOpsTestCase):
     def snapshot(self):
         bvc = self.tmp / ".bvc"
-        return {p.relative_to(bvc).as_posix(): p.read_bytes() for p in bvc.rglob("*") if p.is_file()}
+        return {
+            p.relative_to(bvc).as_posix(): p.read_bytes()
+            for p in bvc.rglob("*")
+            if p.is_file()
+        }
 
     def build(self):
         # 版 0: v0、1: v1、2: v2、3: v0(版 0 と同じ内容)。1 と 2 を削除済みにする。@ = 3
@@ -1007,14 +1117,27 @@ class TestGc(HistoryOpsTestCase):
         dry = repo.gc(dry_run=True)
         self.assertEqual(self.snapshot(), before)  # 何も変わらない
         self.assertEqual(
-            (dry.changed, dry.deleted_commits, dry.deleted_manifests, dry.deleted_chunks, dry.skipped),
+            (
+                dry.changed,
+                dry.deleted_commits,
+                dry.deleted_manifests,
+                dry.deleted_chunks,
+                dry.skipped,
+            ),
             (False, [1, 2], 2, 2, []),
         )
         self.assertGreater(dry.freed_bytes, 0)
         r = repo.gc()
         self.assertTrue(r.changed)
-        self.assertEqual((r.deleted_commits, r.deleted_manifests, r.deleted_chunks, r.freed_bytes),
-                         (dry.deleted_commits, dry.deleted_manifests, dry.deleted_chunks, dry.freed_bytes))
+        self.assertEqual(
+            (r.deleted_commits, r.deleted_manifests, r.deleted_chunks, r.freed_bytes),
+            (
+                dry.deleted_commits,
+                dry.deleted_manifests,
+                dry.deleted_chunks,
+                dry.freed_bytes,
+            ),
+        )
         self.assertEqual(sorted(commit_files(repo.bvc_dir)), [0, 3])
         self.assertEqual([e.id for e in repo.log(include_discarded=True)], [3, 0])
         self.assertEqual(self.oplog(repo)[-1]["op"], "gc")
@@ -1026,14 +1149,24 @@ class TestGc(HistoryOpsTestCase):
         repo.gc()
         repo.discard("0")  # 版 3 と同じマニフェストを持つ根
         r = repo.gc()
-        self.assertEqual((r.deleted_commits, r.deleted_manifests, r.deleted_chunks), ([0], 0, 0))
+        self.assertEqual(
+            (r.deleted_commits, r.deleted_manifests, r.deleted_chunks), ([0], 0, 0)
+        )
         self.assert_all_restorable(self.reopen(repo), {3: b"v0"})
 
     def test_f9_nothing_to_delete(self):
         repo = self.build_linear(1)
         r = repo.gc()
-        self.assertEqual((r.changed, r.deleted_commits, r.deleted_manifests, r.deleted_chunks, r.deleted_tmp),
-                         (False, [], 0, 0, 0))
+        self.assertEqual(
+            (
+                r.changed,
+                r.deleted_commits,
+                r.deleted_manifests,
+                r.deleted_chunks,
+                r.deleted_tmp,
+            ),
+            (False, [], 0, 0, 0),
+        )
         self.assertNotEqual(self.oplog(repo)[-1]["op"], "gc")
 
     def test_f9_pinned_version_is_kept(self):
@@ -1042,17 +1175,27 @@ class TestGc(HistoryOpsTestCase):
         repo = self.reopen(repo)
         self.assertEqual(repo.gc().deleted_commits, [2])
         self.assertEqual(sorted(commit_files(repo.bvc_dir)), [0, 1, 3])
-        self.assertTrue(repo._store.manifest_ok(repo._history.get(1).tree["a.bin"], "full"))
+        self.assertTrue(
+            repo._store.manifest_ok(repo._history.get(1).tree["a.bin"], "full")
+        )
 
     def test_notes_and_tmp(self):
         repo = self.build()
         repo.note("x", rev="3")
-        fsutil.append_jsonl(repo.bvc_dir / "notes" / "1.jsonl", {"format": 1, "time": "t", "text": "old"})
-        fsutil.append_jsonl(repo.bvc_dir / "notes" / "99.jsonl", {"format": 1, "time": "t", "text": "orphan"})
+        fsutil.append_jsonl(
+            repo.bvc_dir / "notes" / "1.jsonl",
+            {"format": 1, "time": "t", "text": "old"},
+        )
+        fsutil.append_jsonl(
+            repo.bvc_dir / "notes" / "99.jsonl",
+            {"format": 1, "time": "t", "text": "orphan"},
+        )
         (repo.bvc_dir / "tmp" / "left.tmp").write_bytes(b"garbage")
         r = repo.gc()
         self.assertEqual(r.deleted_tmp, 1)
-        self.assertEqual(sorted(p.name for p in (repo.bvc_dir / "notes").iterdir()), ["3.jsonl"])
+        self.assertEqual(
+            sorted(p.name for p in (repo.bvc_dir / "notes").iterdir()), ["3.jsonl"]
+        )
         self.assertEqual(list((repo.bvc_dir / "tmp").iterdir()), [])
 
     def test_unknown_tree_keeps_all_data(self):
@@ -1066,10 +1209,15 @@ class TestGc(HistoryOpsTestCase):
         chunks = sorted(repo._store.iter_chunks())
         with self.assertLogs("bvc.repo", "WARNING"):
             r = repo.gc()
-        self.assertEqual((r.deleted_commits, r.skipped), ([1, 2], ["manifests", "chunks"]))
+        self.assertEqual(
+            (r.deleted_commits, r.skipped), ([1, 2], ["manifests", "chunks"])
+        )
         self.assertEqual(sorted(repo._store.iter_manifests()), manifests)
         self.assertEqual(sorted(repo._store.iter_chunks()), chunks)
-        self.assertEqual(sorted(p.name for p in (repo.bvc_dir / "commits").iterdir()), ["0.json", "3.json"])
+        self.assertEqual(
+            sorted(p.name for p in (repo.bvc_dir / "commits").iterdir()),
+            ["0.json", "3.json"],
+        )
 
     def test_unreadable_manifest_keeps_chunks(self):
         repo = self.build()
@@ -1082,17 +1230,31 @@ class TestGc(HistoryOpsTestCase):
 
     def test_r8_fault_during_gc(self):
         # 途中で止まっても生きている版はすべて復元でき、もう一度 gc すれば完了する
-        stages = [("gc:commit", 1), ("gc:commit", 2), ("gc:note", 1), ("gc:manifest", 1), ("gc:manifest", 2),
-                  ("gc:chunk", 1), ("gc:chunk", 2), ("gc:tmp", 1)]
+        stages = [
+            ("gc:commit", 1),
+            ("gc:commit", 2),
+            ("gc:note", 1),
+            ("gc:manifest", 1),
+            ("gc:manifest", 2),
+            ("gc:chunk", 1),
+            ("gc:chunk", 2),
+            ("gc:tmp", 1),
+        ]
         for stage, count in stages:
             with self.subTest(stage=stage, count=count):
                 helpers.remove_tree(self.tmp)
                 self.tmp.mkdir()
                 repo = self.build()
-                fsutil.append_jsonl(repo.bvc_dir / "notes" / "99.jsonl", {"format": 1, "time": "t", "text": "x"})
+                fsutil.append_jsonl(
+                    repo.bvc_dir / "notes" / "99.jsonl",
+                    {"format": 1, "time": "t", "text": "x"},
+                )
                 (repo.bvc_dir / "tmp" / "left.tmp").write_bytes(b"garbage")
                 hook = helpers.FaultAt(stage, count=count)
-                with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(OSError):
+                with (
+                    mock.patch.object(fsutil, "_fault_hook", hook),
+                    self.assertRaises(OSError),
+                ):
                     repo.gc()
                 repo = self.reopen(repo)
                 self.assert_all_restorable(repo, {0: b"v0", 3: b"v0"})
@@ -1128,14 +1290,19 @@ class TestRenameDetection(RepoTestCase):
         repo = self.init()
         (self.tmp / "a.bin").rename(self.tmp / "c.bin")
         r = repo.commit()
-        self.assertEqual((r.state.renamed, r.state.added, r.state.missing), ([("a.bin", "c.bin", 1.0)], [], []))
+        self.assertEqual(
+            (r.state.renamed, r.state.added, r.state.missing),
+            ([("a.bin", "c.bin", 1.0)], [], []),
+        )
         self.assertEqual(r.commit.renames, (("a.bin", "c.bin", 1.0),))
 
     def test_f6_exact_match_with_different_chunker(self):
         # 分割方式が変わってマニフェストが別物でも、内容が同じなら完全一致とみなす
         self.write("a.bin", self.blocks("x", "y", "z"))
         repo = self.init()
-        repo = self.set_config(repo, rules=[{"pattern": "b.bin", "chunker": {"name": "whole"}}])
+        repo = self.set_config(
+            repo, rules=[{"pattern": "b.bin", "chunker": {"name": "whole"}}]
+        )
         (self.tmp / "a.bin").rename(self.tmp / "b.bin")
         r = repo.commit()
         self.assertNotEqual(r.commit.tree["b.bin"], repo.get_commit(0).tree["a.bin"])
@@ -1151,7 +1318,9 @@ class TestRenameDetection(RepoTestCase):
         self.write("n2.bin", b"same")
         self.write("n1.bin", b"same")
         r = repo.commit()
-        self.assertEqual(r.state.renamed, [("g1.bin", "n1.bin", 1.0), ("g2.bin", "n2.bin", 1.0)])
+        self.assertEqual(
+            r.state.renamed, [("g1.bin", "n1.bin", 1.0), ("g2.bin", "n2.bin", 1.0)]
+        )
 
     def test_f6_similar_above_and_below_threshold(self):
         # 共通 3/4 = 0.75(既定 0.5 以上)と、共通 1/4 = 0.25(未満)
@@ -1197,11 +1366,17 @@ class TestRenameDetection(RepoTestCase):
             (self.tmp / g).unlink()
         self.write("n2.bin", self.blocks("c", "4"))
         self.write("n1.bin", self.blocks("c", "3"))
-        self.write("m.bin", self.blocks("h", "h", "h", "c"))  # h.bin と 0.75、g1/g2 と 0.25
+        self.write(
+            "m.bin", self.blocks("h", "h", "h", "c")
+        )  # h.bin と 0.75、g1/g2 と 0.25
         r = repo.commit()
         self.assertEqual(
             r.state.renamed,
-            [("h.bin", "m.bin", 0.75), ("g1.bin", "n1.bin", 0.5), ("g2.bin", "n2.bin", 0.5)],
+            [
+                ("h.bin", "m.bin", 0.75),
+                ("g1.bin", "n1.bin", 0.5),
+                ("g2.bin", "n2.bin", 0.5),
+            ],
         )
 
     def test_f6_manual_rename_takes_priority(self):
@@ -1213,7 +1388,9 @@ class TestRenameDetection(RepoTestCase):
         self.write("c.bin", b"other")
         self.assertEqual(repo.work_state().renamed, [("a.bin", "b.bin", 1.0)])
         r = repo.commit(renames=[("a.bin", "c.bin")])
-        self.assertEqual((r.state.renamed, r.state.added), ([("a.bin", "c.bin", 1.0)], ["b.bin"]))
+        self.assertEqual(
+            (r.state.renamed, r.state.added), ([("a.bin", "c.bin", 1.0)], ["b.bin"])
+        )
 
     def test_f6_manual_rename_path_forms(self):
         # '\\' 区切り・先頭の './'・大文字小文字の違いを受け付ける
@@ -1233,11 +1410,13 @@ class TestRenameDetection(RepoTestCase):
         (self.tmp / "b.bin").unlink()
         self.write("c.bin", b"c")
         self.write("d.bin", b"d")
-        for renames in ([("x.bin", "c.bin")],          # 消えていない
-                        [("a.bin", "b.bin")],          # 新しいファイルではない
-                        [("a.bin", "c.bin"), ("b.bin", "c.bin")],  # 新しい側の重複
-                        [("../a.bin", "c.bin")],       # 作業フォルダの外
-                        [(".bvc/x", "c.bin")]):
+        for renames in (
+            [("x.bin", "c.bin")],  # 消えていない
+            [("a.bin", "b.bin")],  # 新しいファイルではない
+            [("a.bin", "c.bin"), ("b.bin", "c.bin")],  # 新しい側の重複
+            [("../a.bin", "c.bin")],  # 作業フォルダの外
+            [(".bvc/x", "c.bin")],
+        ):
             with self.subTest(renames=renames), self.assertRaises(UsageError):
                 repo.commit(renames=renames)
         self.assertEqual(len(commit_files(repo.bvc_dir)), 1)
@@ -1247,19 +1426,29 @@ class TestRenameDetection(RepoTestCase):
         self.write("result.bin", self.blocks("r", "s", "t"))
         self.write("sub/x.bin", b"xx")
         repo = self.init(track=["*.bin", "sub/*.bin"])
-        repo = self.set_config(repo, rules=[{"pattern": "*.bin", "chunker": {"name": "whole"}}])
+        repo = self.set_config(
+            repo, rules=[{"pattern": "*.bin", "chunker": {"name": "whole"}}]
+        )
         (self.tmp / "result.bin").rename(self.tmp / "result.bin.tmp")
         (self.tmp / "sub" / "x.bin").rename(self.tmp / "sub" / "x.bak")
         self.write("other.tmp", self.blocks("r", "s", "u"))  # 同じサイズで内容が違う
         with self.assertRaises(MissingFiles) as cm:
             repo.commit()
         e = cm.exception
-        self.assertEqual(e.details["hints"], {"result.bin": ["result.bin.tmp"], "sub/x.bin": ["sub/x.bak"]})
-        self.assertIn("  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp", str(e))
+        self.assertEqual(
+            e.details["hints"],
+            {"result.bin": ["result.bin.tmp"], "sub/x.bin": ["sub/x.bak"]},
+        )
+        self.assertIn(
+            "  missing: result.bin\n  ヒント: パターン外に同じ内容のファイルがあります: result.bin.tmp",
+            str(e),
+        )
         self.assertEqual(repo.work_state().hints, e.details["hints"])
         # --allow-missing のときは探さない(読み込みを省く)
         r = repo.commit(allow_missing=True)
-        self.assertEqual((r.state.missing, r.state.hints), (["result.bin", "sub/x.bin"], {}))
+        self.assertEqual(
+            (r.state.missing, r.state.hints), (["result.bin", "sub/x.bin"], {})
+        )
 
     def test_f6_status_has_no_side_effects_and_matches_commit(self):
         # status は保存しないため、新ファイルのマニフェストが無くても隔離記録を作らない
@@ -1269,7 +1458,9 @@ class TestRenameDetection(RepoTestCase):
         (self.tmp / "a.bin").unlink()
         self.write("b.bin", self.blocks("x", "x", "x", "b"))
         s = repo.work_state()
-        self.assertEqual((s.renamed, s.added, s.missing), ([("a.bin", "b.bin", 0.75)], [], []))
+        self.assertEqual(
+            (s.renamed, s.added, s.missing), ([("a.bin", "b.bin", 0.75)], [], [])
+        )
         self.assertEqual((self.tmp / ".bvc" / "health.json").read_bytes(), health)
         self.assertFalse(list((self.tmp / ".bvc" / "quarantine").rglob("*.json")))
         self.assertEqual(repo.commit().state.renamed, s.renamed)
@@ -1293,8 +1484,10 @@ class TestRenameDetection(RepoTestCase):
 DAMAGES = {
     "delete": lambda p: p.unlink(),
     "flip": helpers.flip_byte,
-    "truncate": lambda p: helpers.truncate_file(p, 1),   # ヘッダだけ残す
-    "codec": lambda p: helpers.set_first_byte(p, 1),     # raw → zlib(既知の ID で復号できない)
+    "truncate": lambda p: helpers.truncate_file(p, 1),  # ヘッダだけ残す
+    "codec": lambda p: helpers.set_first_byte(
+        p, 1
+    ),  # raw → zlib(既知の ID で復号できない)
 }
 
 
@@ -1353,8 +1546,13 @@ class TestCommitVerify(CorruptionTestCase):
                 r = repo.commit("edit")
                 # 新しい版は壊れたデータを参照しない。同じ内容なので、壊れていた版 0 も直る
                 self.assertEqual(r.state.modified, ["b.bin"])
-                self.assert_restorable(repo, {0: {"a.bin": b"A" * 100, "b.bin": b"B0"},
-                                              1: {"a.bin": b"A" * 100, "b.bin": b"B1"}})
+                self.assert_restorable(
+                    repo,
+                    {
+                        0: {"a.bin": b"A" * 100, "b.bin": b"B0"},
+                        1: {"a.bin": b"A" * 100, "b.bin": b"B1"},
+                    },
+                )
                 repo.close()
 
     def test_c1_missing_or_quarantined_chunk_is_rebuilt_with_exists(self):
@@ -1369,8 +1567,13 @@ class TestCommitVerify(CorruptionTestCase):
         self.assertFalse(repo.verify().ok)  # 検出して隔離する
         self.write("b.bin", b"B2")
         repo.commit("2")
-        self.assert_restorable(repo, {1: {"a.bin": b"A" * 100, "b.bin": b"B1"},
-                                      2: {"a.bin": b"A" * 100, "b.bin": b"B2"}})
+        self.assert_restorable(
+            repo,
+            {
+                1: {"a.bin": b"A" * 100, "b.bin": b"B1"},
+                2: {"a.bin": b"A" * 100, "b.bin": b"B2"},
+            },
+        )
 
     def test_c1_changed_file_rebuilds_its_chunks(self):
         # 変更のあったファイルも、保存済みのチャンクが欠けていれば作り直す(put_file の has_chunk)
@@ -1391,7 +1594,9 @@ class TestCommitVerify(CorruptionTestCase):
         helpers.flip_byte(victim)
         self.write("b.bin", b"B1")
         repo.commit()
-        self.assertTrue(victim.exists())  # 見逃して、新しい版が壊れたチャンクを参照している
+        self.assertTrue(
+            victim.exists()
+        )  # 見逃して、新しい版が壊れたチャンクを参照している
         self.assertEqual(repo.verify(quick=True).broken_commits, [])
         self.assertEqual(repo.verify().broken_commits, [0, 1])
         # 検出後の commit は作り直す
@@ -1427,7 +1632,9 @@ class TestSkipBroken(CorruptionTestCase):
             repo.undo()
         self.assertIn("--skip-broken", str(cm.exception))
         # 作業ファイルも HEAD も変えず、自動コミットも作らない
-        self.assertEqual((self.head(repo), self.files()), (Head(7, 0), {"a.bin": b"edit"}))
+        self.assertEqual(
+            (self.head(repo), self.files()), (Head(7, 0), {"a.bin": b"edit"})
+        )
         self.assertEqual(len(commit_files(repo.bvc_dir)), n_commits)
 
         self.write("a.bin", b"v7")
@@ -1467,7 +1674,9 @@ class TestSkipBroken(CorruptionTestCase):
         self.assertIn("健全な版がありません", str(cm.exception))
         self.assert_clean_at(repo, 2)
         repo.goto("2")
-        with self.assertRaises(CannotMove):  # 根での undo は skip_broken でも終了コード 4
+        with self.assertRaises(
+            CannotMove
+        ):  # 根での undo は skip_broken でも終了コード 4
             repo._history.set_head(Head(0, 0))
             repo.undo(skip_broken=True)
 
@@ -1509,7 +1718,13 @@ class TestVerify(CorruptionTestCase):
             r = repo.verify(quick=quick)
             self.assertTrue(r.ok)
             self.assertEqual(
-                (r.changed, r.checked_chunks, r.checked_manifests, r.checked_commits, r.broken_commits),
+                (
+                    r.changed,
+                    r.checked_chunks,
+                    r.checked_manifests,
+                    r.checked_commits,
+                    r.broken_commits,
+                ),
                 (False, 3, 3, 3, []),
             )
         self.assertEqual(self.oplog(repo)[-1]["op"], "verify")
@@ -1526,13 +1741,22 @@ class TestVerify(CorruptionTestCase):
         sha = self.manifest_of(repo, 1)
         helpers.flip_byte(repo._store.manifest_path(sha))
         health = (repo.bvc_dir / "health.json").read_bytes()
-        self.assertFalse(any(e.broken for e in repo.log()))  # 未検出のうちは ✗ を付けない
-        self.assertEqual((repo.bvc_dir / "health.json").read_bytes(), health)  # log は記録しない
+        self.assertFalse(
+            any(e.broken for e in repo.log())
+        )  # 未検出のうちは ✗ を付けない
+        self.assertEqual(
+            (repo.bvc_dir / "health.json").read_bytes(), health
+        )  # log は記録しない
 
         r = repo.verify()
-        self.assertEqual((r.ok, r.changed, r.broken_commits, r.bad_manifests), (False, True, [1, 2], [sha]))
+        self.assertEqual(
+            (r.ok, r.changed, r.broken_commits, r.bad_manifests),
+            (False, True, [1, 2], [sha]),
+        )
         self.assertEqual(self.quarantined(repo, "manifests"), [f"{sha}.json"])
-        self.assertEqual({e.id: e.broken for e in repo.log()}, {0: False, 1: True, 2: True})
+        self.assertEqual(
+            {e.id: e.broken for e in repo.log()}, {0: False, 1: True, 2: True}
+        )
         repo.goto("0")
         self.assertEqual(self.files(), {"a.bin": b"a0", "b.bin": b"b0"})
         self.assertFalse(repo.verify().changed)  # 同じ異常は、2回目には変化なし
@@ -1540,7 +1764,9 @@ class TestVerify(CorruptionTestCase):
     def test_c11_fake_chunk_and_c5_quarantine(self):
         repo = self.build_linear(2)
         victim = self.chunk_of(repo, 1)
-        victim.write_bytes(b"\x00" + b"xx")  # 形式も長さも正しいが、名前と中身が合わない
+        victim.write_bytes(
+            b"\x00" + b"xx"
+        )  # 形式も長さも正しいが、名前と中身が合わない
         self.assertTrue(repo.verify(quick=True).ok)  # quick では見逃す
         r = repo.verify()
         self.assertEqual((r.broken_commits, r.bad_chunks), ([1], [victim.name]))
@@ -1567,7 +1793,10 @@ class TestVerify(CorruptionTestCase):
         helpers.flip_byte(victim)
         self.assertEqual(repo.verify().broken_commits, [1])
         r = repo.verify(repair=True)
-        self.assertEqual((r.ok, r.changed, r.repaired_chunks, r.bad_chunks), (True, True, [victim.name], []))
+        self.assertEqual(
+            (r.ok, r.changed, r.repaired_chunks, r.bad_chunks),
+            (True, True, [victim.name], []),
+        )
         self.assertFalse(any(e.broken for e in repo.log()))
         for cid in (0, 2, 1):
             repo.goto(str(cid))
@@ -1596,7 +1825,9 @@ class TestVerify(CorruptionTestCase):
         sha = self.manifest_of(repo, 2)
         repo._store.manifest_path(sha).unlink()
         r = repo.verify(repair=True)
-        self.assertEqual((r.ok, r.repaired_manifests, r.repaired_chunks), (True, [sha], []))
+        self.assertEqual(
+            (r.ok, r.repaired_manifests, r.repaired_chunks), (True, [sha], [])
+        )
         repo.goto("0")
         repo.goto("2")
         self.assertEqual(self.files(), {"a.bin": b"v2"})
@@ -1609,7 +1840,9 @@ class TestVerify(CorruptionTestCase):
             repo = self.reopen()
         r = repo.verify()
         self.assertEqual((r.ok, r.broken_commits), (False, [1]))
-        self.assertEqual(repo._store.health.records("bad_commits")["1"]["reason"], "unreadable")
+        self.assertEqual(
+            repo._store.health.records("bad_commits")["1"]["reason"], "unreadable"
+        )
         # 削除した版は検査の対象外(gc で消える)
         repo.discard("1")
         r = repo.verify()
@@ -1631,7 +1864,9 @@ class TestRecoverControl(MoveTestCase):
         "empty": lambda p: p.write_bytes(b""),
         "json": helpers.break_json,
         # JSON としては読めるが、必要な項目が無い・型が違う
-        "invalid": lambda p: p.write_text('{"format": 1, "bad_chunks": [], "names": 1, "entries": 1}', "utf-8"),
+        "invalid": lambda p: p.write_text(
+            '{"format": 1, "bad_chunks": [], "names": 1, "entries": 1}', "utf-8"
+        ),
     }
 
     def setUp(self):
@@ -1678,10 +1913,13 @@ class TestRecoverControl(MoveTestCase):
             r = repo.commit()
             self.assertEqual((r.commit.id, r.new_branch), (3, True))
             self.write("a.bin", b"v1")
+
         self.check_each_break("HEAD.json", check)
 
     def test_c7_head_points_to_unknown_version(self):
-        (self.tmp / ".bvc" / "HEAD.json").write_text('{"format":1,"at":99,"branch":0}', "utf-8")
+        (self.tmp / ".bvc" / "HEAD.json").write_text(
+            '{"format":1,"at":99,"branch":0}', "utf-8"
+        )
         repo = self.open_recovered("HEAD.json")
         self.assertEqual(self.head(repo), Head(1, 0))
 
@@ -1709,6 +1947,7 @@ class TestRecoverControl(MoveTestCase):
             self.write("a.bin", b"new")
             self.assertEqual(repo.commit().commit.id, 3)
             self.write("a.bin", b"v1")
+
         self.check_each_break("counters.json", check)
 
     def test_c7_counters_do_not_reuse_numbers_removed_by_gc(self):
@@ -1730,18 +1969,24 @@ class TestRecoverControl(MoveTestCase):
     def test_c7_index(self):
         def check(repo):
             self.assertFalse(repo.work_state().dirty)
-            self.assertEqual(json.loads((self.tmp / ".bvc" / "index.json").read_text())["entries"], {})
+            self.assertEqual(
+                json.loads((self.tmp / ".bvc" / "index.json").read_text())["entries"],
+                {},
+            )
+
         self.check_each_break("index.json", check)
 
     def test_c7_branches(self):
         def check(repo):
             self.assertEqual([b.name for b in repo.branches()], [None])
+
         self.check_each_break("branches.json", check)
 
     def test_c7_health(self):
         def check(repo):
             self.assertEqual(repo._store.health.records("bad_chunks"), {})
             self.assertTrue(repo.verify().ok)
+
         self.check_each_break("health.json", check)
 
     def test_c7_config_is_not_recovered(self):
@@ -1758,7 +2003,14 @@ class TestRecoverControl(MoveTestCase):
     def test_c7_read_error_changes_nothing(self):
         # 読み込み自体の失敗(使用中など)は復旧せずに中止する(I-20)
         real = fsutil.read_bytes
-        for name in ("HEAD.json", "counters.json", "branches.json", "index.json", "health.json", "config.json"):
+        for name in (
+            "HEAD.json",
+            "counters.json",
+            "branches.json",
+            "index.json",
+            "health.json",
+            "config.json",
+        ):
             with self.subTest(file=name):
                 self.restore_bvc()
                 before = helpers.tree_hashes(self.tmp / ".bvc")
@@ -1768,13 +2020,22 @@ class TestRecoverControl(MoveTestCase):
                         raise PermissionError(13, "使用中", str(path))
                     return real(path)
 
-                with mock.patch.object(fsutil, "read_bytes", busy), self.assertRaises(FileBusy):
+                with (
+                    mock.patch.object(fsutil, "read_bytes", busy),
+                    self.assertRaises(FileBusy),
+                ):
                     Repo.open(self.tmp)
                 self.assertEqual(helpers.tree_hashes(self.tmp / ".bvc"), before)
                 self.assertFalse((self.tmp / ".bvc" / "lock").exists())
 
     def test_unknown_format_changes_nothing(self):
-        for name in ("HEAD.json", "counters.json", "branches.json", "index.json", "health.json"):
+        for name in (
+            "HEAD.json",
+            "counters.json",
+            "branches.json",
+            "index.json",
+            "health.json",
+        ):
             with self.subTest(file=name):
                 self.restore_bvc()
                 (self.tmp / ".bvc" / name).write_text('{"format": 99}', "utf-8")

@@ -8,7 +8,7 @@ import pytest
 
 TESTS_DIR: Final[Path] = Path(__file__).parent
 
-SAMPLE: Final[str] = '''
+SAMPLE: Final[str] = """
 import unittest
 import pytest
 from tests import helpers
@@ -27,16 +27,20 @@ class TestUnit(unittest.TestCase):
     @helpers.slow
     def test_slow_unit(self):
         pass
-'''
+"""
 
 
 @pytest.fixture
-def sandbox(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
+def sandbox(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> pytest.Pytester:
     monkeypatch.delenv("BVC_RUN_SLOW", raising=False)
     monkeypatch.delenv("BVC_TEST_LONG_PATH", raising=False)
     tests = pytester.mkpydir("tests")
     for name in ("conftest.py", "helpers.py"):
-        (tests / name).write_text((TESTS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8")
+        (tests / name).write_text(
+            (TESTS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+        )
     (tests / "test_sample.py").write_text(SAMPLE, encoding="utf-8")
     return pytester
 
@@ -88,11 +92,15 @@ def test_no_tests_is_success(sandbox: pytest.Pytester):
 
 def test_force_long_path_requires_fsutil(sandbox: pytest.Pytester):
     # --force-long-path で fsutil の閾値を差し替える。fsutil が無ければ、黙って通常の経路で実行せずに失敗させる。
-    sandbox.makepyfile(**{"tests/test_lp.py": '''
+    sandbox.makepyfile(
+        **{
+            "tests/test_lp.py": """
 def test_threshold():
     from bvc import fsutil
     assert fsutil.LONG_PATH_THRESHOLD == 0
-'''})
+"""
+        }
+    )
     r = sandbox.runpytest_subprocess("tests/test_lp.py", "--force-long-path")
     try:
         import bvc.fsutil  # noqa: F401

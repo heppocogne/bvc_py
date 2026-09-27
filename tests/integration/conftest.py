@@ -25,7 +25,9 @@ def workdir() -> Path:
     helpers.remove_tree(path)
 
 
-def run_driver(workdir: Path, pattern: str, count: int, op: str, *args: str) -> list[str]:
+def run_driver(
+    workdir: Path, pattern: str, count: int, op: str, *args: str
+) -> list[str]:
     # ドライバを起動し、段階名 pattern の count 回目で kill する。出力された段階名の一覧を返す。
     # 段階に達しないまま終了した場合は AssertionError。kill の後は、残ったロックファイルを
     # 利用者の手順(案内に従って削除する)に倣って消す。
@@ -57,7 +59,9 @@ def run_driver(workdir: Path, pattern: str, count: int, op: str, *args: str) -> 
         proc.stderr.close()
     assert lines and lines[-1].startswith("WAIT "), (
         f"段階 {pattern}#{count} に達しませんでした(終了コード {proc.returncode})\n"
-        + "\n".join(lines[-20:]) + "\n" + err
+        + "\n".join(lines[-20:])
+        + "\n"
+        + err
     )
     lock = workdir / ".bvc" / "lock"
     assert lock.exists(), "kill したのにロックが残っていない"

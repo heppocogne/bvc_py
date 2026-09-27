@@ -68,7 +68,9 @@ def _is_explicit(item: pytest.Item, explicit: list[tuple[Path, str]]) -> bool:
     return False
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
     run_slow = config.getoption("--run-slow")
     explicit = _explicit_node_ids(config)
     skip_slow = pytest.mark.skip(reason="時間のかかるテスト(実行するには --run-slow)")

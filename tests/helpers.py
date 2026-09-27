@@ -23,6 +23,7 @@ _F = TypeVar("_F", bound=Callable)
 # 長いパスの経路(I-16、実装計画書 6.5節)
 # ---------------------------------------------------------------------------
 
+
 def _apply_long_path_setting() -> None:
     # 環境変数 BVC_TEST_LONG_PATH があれば、fsutil.os_path が全パスを \\?\ 付きにするよう閾値を 0 にする。
     #
@@ -80,7 +81,9 @@ def _long_path_hook(event: str, args: tuple) -> None:
             continue
         limit = _MAX_DIR_PATH if event == "os.mkdir" else _MAX_PATH
         if len(os.path.abspath(p)) >= limit:
-            raise FileNotFoundError(3, "長いパスは使えません(LongPathsEnabled 無効の模擬)", p)
+            raise FileNotFoundError(
+                3, "長いパスは使えません(LongPathsEnabled 無効の模擬)", p
+            )
 
 
 class no_long_paths:
@@ -103,6 +106,7 @@ class no_long_paths:
 # ---------------------------------------------------------------------------
 # slow(実装計画書 6.5節、I-15)
 # ---------------------------------------------------------------------------
+
 
 def run_slow_enabled() -> bool:
     return bool(os.environ.get(ENV_RUN_SLOW))
@@ -129,6 +133,7 @@ def slow(func: _F) -> _F:
 # ---------------------------------------------------------------------------
 # 一時フォルダ
 # ---------------------------------------------------------------------------
+
 
 class TempDirTestCase(unittest.TestCase):
     # テストごとに一時フォルダ self.tmp を作り、終了時に消す。
@@ -162,6 +167,7 @@ def remove_tree(path: Path) -> None:
 # 疑似乱数ファイル
 # ---------------------------------------------------------------------------
 
+
 def random_bytes(size: int, seed: int = 0) -> bytes:
     # seed から決まる疑似乱数のバイト列(圧縮の効かない内容)。
     return random.Random(seed).randbytes(size)
@@ -188,6 +194,7 @@ def write_random_file(path: Path, size: int, seed: int = 0) -> str:
 # SHA-256 とツリーの比較
 # ---------------------------------------------------------------------------
 
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -212,7 +219,8 @@ def iter_files(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> Iterator[Pat
 def tree_hashes(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> dict[str, str]:
     # root 以下の全ファイルの {相対パス('/' 区切り): SHA-256}。
     return {
-        p.relative_to(root).as_posix(): sha256_file(p) for p in iter_files(root, exclude)
+        p.relative_to(root).as_posix(): sha256_file(p)
+        for p in iter_files(root, exclude)
     }
 
 
@@ -220,13 +228,16 @@ def tree_hashes(root: Path, exclude: tuple[str, ...] = (".bvc",)) -> dict[str, s
 # 破損の再現(実装計画書 6.4節)
 # ---------------------------------------------------------------------------
 
+
 class FaultAt:
     # 障害注入のフック(実装計画書 6.2節)。fsutil._fault_hook に差し込む。
     #
     # 段階名が stage に一致したら、count 回目に exc を送出する。呼ばれた段階名を calls に記録する。
     # stage に None を渡すと、記録だけする。
 
-    def __init__(self, stage: str | None = None, exc: BaseException | None = None, count: int = 1):
+    def __init__(
+        self, stage: str | None = None, exc: BaseException | None = None, count: int = 1
+    ):
         self.stage = stage
         self.exc = exc if exc is not None else OSError("注入した障害")
         self.count = count

@@ -49,6 +49,7 @@ def _check_check(check: str) -> None:
 # health.json(I-7)
 # ---------------------------------------------------------------------------
 
+
 class Health:
     # health.json(壊れたチャンク・マニフェスト・版の記録)の読み書き。スレッドセーフ。
     # 壊れていたら空として扱い、次の書き込みで作り直す(警告を warnings に残す)。
@@ -75,13 +76,17 @@ class Health:
             return self._empty()
         except CorruptData:
             self.problem = "corrupt"
-            self.warnings.append("health.json が壊れているため、空として扱います(次の verify で再検出されます)")
+            self.warnings.append(
+                "health.json が壊れているため、空として扱います(次の verify で再検出されます)"
+            )
             return self._empty()
         try:
             return self._parse(obj)
         except (CorruptData, UnsafePath):
             self.problem = "invalid"
-            self.warnings.append("health.json の内容が不正なため、空として扱います(次の verify で再検出されます)")
+            self.warnings.append(
+                "health.json の内容が不正なため、空として扱います(次の verify で再検出されます)"
+            )
             return self._empty()
 
     def _parse(self, obj: dict) -> dict[str, dict[str, dict]]:
@@ -127,14 +132,18 @@ class Health:
             self.problem = None
 
     def _save(self) -> None:
-        fsutil.atomic_write_json(self.path, {"format": fsutil.FORMAT, **self._data}, self.tmpdir)
+        fsutil.atomic_write_json(
+            self.path, {"format": fsutil.FORMAT, **self._data}, self.tmpdir
+        )
 
 
 # ---------------------------------------------------------------------------
 # マニフェストの JSON
 # ---------------------------------------------------------------------------
 
-_MANIFEST_KEYS: Final[frozenset[str]] = frozenset(["format", "size", "sha256", "chunker", "chunks"])
+_MANIFEST_KEYS: Final[frozenset[str]] = frozenset(
+    ["format", "size", "sha256", "chunker", "chunks"]
+)
 
 
 def manifest_to_json(m: Manifest) -> dict:
@@ -165,7 +174,12 @@ def manifest_from_json(obj: Any) -> Manifest:
 
     if set(obj) != _MANIFEST_KEYS:
         raise bad("項目に過不足がある")
-    size, whole_sha, chunker, chunks = obj["size"], obj["sha256"], obj["chunker"], obj["chunks"]
+    size, whole_sha, chunker, chunks = (
+        obj["size"],
+        obj["sha256"],
+        obj["chunker"],
+        obj["chunks"],
+    )
     if not _is_int(size) or size < 0:
         raise bad("size")
     if not isinstance(chunker, dict) or type(chunker.get("name")) is not str:
@@ -189,6 +203,7 @@ def manifest_from_json(obj: Any) -> Manifest:
 # ---------------------------------------------------------------------------
 # 並列処理の補助
 # ---------------------------------------------------------------------------
+
 
 class _Inflight:
     # 処理中のチャンクの件数・バイト数を制限する(メモリ使用量を抑えるため)。
@@ -220,6 +235,7 @@ class _Inflight:
 # ---------------------------------------------------------------------------
 # ObjectStore
 # ---------------------------------------------------------------------------
+
 
 class ObjectStore:
     def __init__(
@@ -308,7 +324,9 @@ class ObjectStore:
 
     # --- チャンク ---
 
-    def has_chunk(self, sha: str, check: str = "exists", length: int | None = None) -> bool:
+    def has_chunk(
+        self, sha: str, check: str = "exists", length: int | None = None
+    ) -> bool:
         # チャンクが使える状態であるか。
         # check="exists": ファイルがあり、ヘッダの codec ID が既知で、隔離記録に無い。
         # check="full"  : さらに読み出して復号し、ハッシュ(と length が分かれば長さ)を照合する。
@@ -356,7 +374,10 @@ class ObjectStore:
             return ref, 1 + len(payload)
 
     def put_chunk_stream(
-        self, pieces: Iterable[bytes], compression: str | None = None, check: str = "exists"
+        self,
+        pieces: Iterable[bytes],
+        compression: str | None = None,
+        check: str = "exists",
     ) -> ChunkRef:
         # 大きなチャンクを、メモリに載せずに保存する。
         return self._put_chunk_stream(pieces, compression, check)[0]
@@ -446,7 +467,9 @@ class ObjectStore:
             f = open(fsutil.os_path(path), "rb")
         except FileNotFoundError:
             self.quarantine("chunk", sha, "missing")
-            raise CorruptData(f"チャンクがありません: {sha}", sha=sha, reason="missing") from None
+            raise CorruptData(
+                f"チャンクがありません: {sha}", sha=sha, reason="missing"
+            ) from None
         error = None
         h = hashlib.sha256()
         total = 0
@@ -458,7 +481,9 @@ class ObjectStore:
                 codec = get_codec(head[0])
                 limit = _NO_LIMIT if length is None else length
                 try:
-                    for out in codec.iter_decode(iter(lambda: f.read(CHUNK_READ_SIZE), b""), limit):
+                    for out in codec.iter_decode(
+                        iter(lambda: f.read(CHUNK_READ_SIZE), b""), limit
+                    ):
                         h.update(out)
                         total += len(out)
                         yield out
@@ -472,7 +497,9 @@ class ObjectStore:
                 error = "hash_mismatch"
         if error is not None:
             self.quarantine("chunk", sha, error)
-            raise CorruptData(f"チャンクが壊れています({error}): {sha}", sha=sha, reason=error)
+            raise CorruptData(
+                f"チャンクが壊れています({error}): {sha}", sha=sha, reason=error
+            )
 
     def iter_chunks(self) -> Iterator[str]:
         # 保存されているチャンクの sha(名前の形式が正しいものだけ)。
@@ -507,11 +534,15 @@ class ObjectStore:
         # 名前とのハッシュ照合、JSON と値の形式検査をして読む。異常なら隔離して CorruptData。
         path = self.manifest_path(sha)
         if self.health.is_bad("bad_manifests", sha):
-            raise CorruptData(f"マニフェストは壊れているため隔離済みです: {sha}", sha=sha)
+            raise CorruptData(
+                f"マニフェストは壊れているため隔離済みです: {sha}", sha=sha
+            )
 
         def fail(reason: str, cause: BaseException | None = None) -> CorruptData:
             self.quarantine("manifest", sha, reason)
-            err = CorruptData(f"マニフェストが壊れています({reason}): {sha}", sha=sha, reason=reason)
+            err = CorruptData(
+                f"マニフェストが壊れています({reason}): {sha}", sha=sha, reason=reason
+            )
             err.__cause__ = cause
             return err
 
@@ -664,7 +695,9 @@ class ObjectStore:
                 fut.cancel()
             concurrent.futures.wait(futs)
             raise
-        concurrent.futures.wait([s for s in slots if isinstance(s, concurrent.futures.Future)])
+        concurrent.futures.wait(
+            [s for s in slots if isinstance(s, concurrent.futures.Future)]
+        )
 
         stats = PutStats(size=done)
         refs: list[ChunkRef] = []
@@ -676,7 +709,9 @@ class ObjectStore:
                 stats.new_chunks += 1
                 stats.new_bytes += ref.length
                 stats.stored_bytes += stored
-        m = Manifest(size=done, sha256=full.hexdigest(), chunker=ck.params(), chunks=tuple(refs))
+        m = Manifest(
+            size=done, sha256=full.hexdigest(), chunker=ck.params(), chunks=tuple(refs)
+        )
         return self.put_manifest(m), stats
 
     def build_manifest(self, f: BinaryIO, chunker: dict) -> Manifest:
@@ -697,7 +732,9 @@ class ObjectStore:
             if end:
                 refs.append(ChunkRef(h.hexdigest(), n))
                 h, n = None, 0
-        return Manifest(size=size, sha256=full.hexdigest(), chunker=ck.params(), chunks=tuple(refs))
+        return Manifest(
+            size=size, sha256=full.hexdigest(), chunker=ck.params(), chunks=tuple(refs)
+        )
 
     def hash_file(self, f: BinaryIO, chunker: dict) -> str:
         # 保存せずにマニフェストの sha を計算する(変更検出用)。
@@ -725,7 +762,9 @@ class ObjectStore:
         if total != m.size or h.hexdigest() != m.sha256:
             self.quarantine("manifest", sha, "content_mismatch")
             raise CorruptData(
-                f"マニフェストの内容がチャンクと一致しません: {sha}", sha=sha, reason="content_mismatch"
+                f"マニフェストの内容がチャンクと一致しません: {sha}",
+                sha=sha,
+                reason="content_mismatch",
             )
 
     # --- 全件検証 ---
@@ -783,7 +822,9 @@ class ObjectStore:
                     self.quarantine("chunk", ref.sha, "length_mismatch")
                     del lengths[ref.sha]
                     res.bad_chunks.append(ref.sha)
-                    res.broken_manifests[msha] = f"チャンクの長さが一致しない: {ref.sha}"
+                    res.broken_manifests[msha] = (
+                        f"チャンクの長さが一致しない: {ref.sha}"
+                    )
                     break
             if progress is not None:
                 progress(ProgressEvent("verify_manifests", i, len(manifests)))

@@ -35,8 +35,12 @@ class TestAtomicWrite(helpers.TempDirTestCase):
         self.assertEqual(list(self.tmpdir.iterdir()), [])
 
     def test_json(self):
-        fsutil.atomic_write_json(self.path, {"format": 1, "b": "日本", "a": [1, 2]}, self.tmpdir)
-        self.assertEqual(self.path.read_bytes(), '{"a":[1,2],"b":"日本","format":1}\n'.encode())
+        fsutil.atomic_write_json(
+            self.path, {"format": 1, "b": "日本", "a": [1, 2]}, self.tmpdir
+        )
+        self.assertEqual(
+            self.path.read_bytes(), '{"a":[1,2],"b":"日本","format":1}\n'.encode()
+        )
         self.assertEqual(fsutil.load_json(self.path, "x")["b"], "日本")
 
     def test_canonical_json_rejects_nan(self):
@@ -61,7 +65,9 @@ class TestAtomicWrite(helpers.TempDirTestCase):
         # D-15: 読めない(使用中など)ことを破損と誤認して、自動復旧に進ませない
         self.path.parent.mkdir(parents=True)
         self.path.write_bytes(b'{"format":1}')
-        with mock.patch.object(fsutil, "read_bytes", side_effect=PermissionError("busy")):
+        with mock.patch.object(
+            fsutil, "read_bytes", side_effect=PermissionError("busy")
+        ):
             with self.assertRaises(PermissionError):
                 fsutil.load_json(self.path, "x")
 
@@ -182,8 +188,19 @@ class TestChecks(unittest.TestCase):
         # P-2
         good = "0123456789abcdef" * 4
         self.assertEqual(fsutil.check_sha(good), good)
-        bad = [good.upper(), good[:-1], good + "0", "../" + good[3:], "g" * 64, "", None,
-               64, good[:-1] + "\n", good + "\n", b"a" * 64]
+        bad = [
+            good.upper(),
+            good[:-1],
+            good + "0",
+            "../" + good[3:],
+            "g" * 64,
+            "",
+            None,
+            64,
+            good[:-1] + "\n",
+            good + "\n",
+            b"a" * 64,
+        ]
         for s in bad:
             with self.subTest(s=s):
                 with self.assertRaises(UnsafePath):
@@ -207,8 +224,17 @@ class TestChecks(unittest.TestCase):
                     fsutil.check_id_str(s)
 
     def test_check_relpath_ok(self):
-        for p in ("a.bin", "mesh/a.dat", "日本語/ファイル.bin", ".hidden", "a b/c", "x.bvc/y",
-                  "bvc/a", "CONSOLE.bin", "a..b"):
+        for p in (
+            "a.bin",
+            "mesh/a.dat",
+            "日本語/ファイル.bin",
+            ".hidden",
+            "a b/c",
+            "x.bvc/y",
+            "bvc/a",
+            "CONSOLE.bin",
+            "a..b",
+        ):
             with self.subTest(p=p):
                 self.assertEqual(fsutil.check_relpath(p), p)
 
@@ -219,11 +245,47 @@ class TestChecks(unittest.TestCase):
     def test_check_relpath_bad(self):
         # P-1(単体): 仕様書 2.10節の規則
         bad = [
-            "", "/abs", "../x", "a/../x", "a/..", "./a", "a/./b", "a//b", "a/", "C:", "C:/x",
-            "C:\\x", "\\\\server\\x", "a\\b", ".bvc", ".bvc/config.json", ".BVC/x",
-            "CON", "con.txt", "a/NUL", "CONIN$", "conout$.bin", "COM1.bin", "LPT9", "com\u00b9", "a.", "a ", "a./b",
-            "a<b", "a>b", "a\"b", "a|b", "a?b", "a*b", "a\x00b", "a\x1fb", "a\x7fb", "a\nb",
-            None, 1, b"a",
+            "",
+            "/abs",
+            "../x",
+            "a/../x",
+            "a/..",
+            "./a",
+            "a/./b",
+            "a//b",
+            "a/",
+            "C:",
+            "C:/x",
+            "C:\\x",
+            "\\\\server\\x",
+            "a\\b",
+            ".bvc",
+            ".bvc/config.json",
+            ".BVC/x",
+            "CON",
+            "con.txt",
+            "a/NUL",
+            "CONIN$",
+            "conout$.bin",
+            "COM1.bin",
+            "LPT9",
+            "com\u00b9",
+            "a.",
+            "a ",
+            "a./b",
+            "a<b",
+            "a>b",
+            'a"b',
+            "a|b",
+            "a?b",
+            "a*b",
+            "a\x00b",
+            "a\x1fb",
+            "a\x7fb",
+            "a\nb",
+            None,
+            1,
+            b"a",
         ]
         for p in bad:
             with self.subTest(p=p):
@@ -240,10 +302,14 @@ class TestResolveInWorkdir(helpers.TempDirTestCase):
         self.outside.mkdir()
 
     def test_ok(self):
-        self.assertEqual(fsutil.resolve_in_workdir(self.work, "a/b.bin"), self.work / "a" / "b.bin")
+        self.assertEqual(
+            fsutil.resolve_in_workdir(self.work, "a/b.bin"), self.work / "a" / "b.bin"
+        )
         (self.work / "a").mkdir()
         (self.work / "a" / "b.bin").write_bytes(b"x")
-        self.assertEqual(fsutil.resolve_in_workdir(self.work, "a/b.bin"), self.work / "a" / "b.bin")
+        self.assertEqual(
+            fsutil.resolve_in_workdir(self.work, "a/b.bin"), self.work / "a" / "b.bin"
+        )
 
     def test_bad_relpath(self):
         for p in ("../x", ".bvc/x", "C:/x"):
@@ -256,7 +322,9 @@ class TestResolveInWorkdir(helpers.TempDirTestCase):
             fsutil.resolve_in_workdir(self.work, "a/b.bin")
 
     def test_symlink_in_middle(self):
-        if not helpers.try_symlink(self.outside, self.work / "link", target_is_directory=True):
+        if not helpers.try_symlink(
+            self.outside, self.work / "link", target_is_directory=True
+        ):
             self.skipTest("シンボリックリンクを作れない環境")
         with self.assertRaises(UnsafePath):
             fsutil.resolve_in_workdir(self.work, "link/x.bin")
@@ -288,15 +356,20 @@ class TestResolveInWorkdir(helpers.TempDirTestCase):
         # 同じ名前でも .bvc の別名でなければ通る
         (self.work / "Long Folder Name").mkdir()
         self.assertEqual(
-            fsutil.resolve_in_workdir(self.work, "LONGFO~1/x.bin"), self.work / "LONGFO~1" / "x.bin"
+            fsutil.resolve_in_workdir(self.work, "LONGFO~1/x.bin"),
+            self.work / "LONGFO~1" / "x.bin",
         )
 
     def test_real_path_and_is_dir(self):
-        self.assertEqual(fsutil.real_path(self.work / "a" / ".." / "b"), self.work / "b")
+        self.assertEqual(
+            fsutil.real_path(self.work / "a" / ".." / "b"), self.work / "b"
+        )
         self.assertTrue(fsutil.is_dir(self.work))
         self.assertFalse(fsutil.is_dir(self.work / "none"))
         with mock.patch.object(fsutil, "LONG_PATH_THRESHOLD", 0):
-            self.assertEqual(fsutil.real_path(self.work), self.work)  # \\?\ を外して返す
+            self.assertEqual(
+                fsutil.real_path(self.work), self.work
+            )  # \\?\ を外して返す
             self.assertTrue(fsutil.is_dir(self.work))
 
 
@@ -333,9 +406,13 @@ class TestLongPath(helpers.TempDirTestCase):
         self.assertTrue(fsutil.same_or_inside(self.tmp, self.tmp / "a" / "b"))
         self.assertFalse(fsutil.same_or_inside(self.tmp / "a", self.tmp / "ab"))
         self.assertFalse(fsutil.same_or_inside(self.tmp / "a", self.tmp))
-        self.assertFalse(fsutil.same_or_inside(self.tmp / "a", self.tmp / "a" / ".." / "b"))
+        self.assertFalse(
+            fsutil.same_or_inside(self.tmp / "a", self.tmp / "a" / ".." / "b")
+        )
         if os.name == "nt":
-            self.assertTrue(fsutil.same_or_inside(self.tmp, str(self.tmp).upper() + "\\x"))
+            self.assertTrue(
+                fsutil.same_or_inside(self.tmp, str(self.tmp).upper() + "\\x")
+            )
         with mock.patch.object(fsutil, "LONG_PATH_THRESHOLD", 0):
             self.assertTrue(fsutil.same_or_inside(self.tmp, self.tmp / "a"))
             self.assertFalse(fsutil.same_or_inside(self.tmp / "a", self.tmp))
@@ -349,14 +426,19 @@ class TestGlob(unittest.TestCase):
             self.assertFalse(fsutil.glob_match(pattern, p, ignore_case), (pattern, p))
 
     def test_star(self):
-        self.check("*.bin", ["a.bin", ".bin", "x.y.bin"], ["d/a.bin", "a.bin2", "a.BIN"])
+        self.check(
+            "*.bin", ["a.bin", ".bin", "x.y.bin"], ["d/a.bin", "a.bin2", "a.BIN"]
+        )
 
     def test_question(self):
         self.check("a?.dat", ["ab.dat", "a..dat"], ["a.dat", "a/b.dat", "abc.dat"])
 
     def test_double_star_middle(self):
-        self.check("mesh/**/*.dat", ["mesh/a.dat", "mesh/x/a.dat", "mesh/x/y/a.dat"],
-                   ["mesh.dat", "a/mesh/a.dat", "mesh/a.bin", "meshx/a.dat"])
+        self.check(
+            "mesh/**/*.dat",
+            ["mesh/a.dat", "mesh/x/a.dat", "mesh/x/y/a.dat"],
+            ["mesh.dat", "a/mesh/a.dat", "mesh/a.bin", "meshx/a.dat"],
+        )
 
     def test_double_star_head_and_tail(self):
         self.check("**/*.bin", ["a.bin", "x/y/a.bin"], ["a.dat"])

@@ -52,11 +52,17 @@ def lock_bytes(
 ) -> bytes:
     # bvc.lock の内容。キーをソートし、インデント付き・末尾に改行(git の差分をファイル単位の行にするため)。
     files = {
-        path: {"size": manifests[sha].size, "sha256": manifests[sha].sha256, "manifest": sha}
+        path: {
+            "size": manifests[sha].size,
+            "sha256": manifests[sha].sha256,
+            "manifest": sha,
+        }
         for path, sha in tree.items()
     }
     obj = {"format": 1, "bvc_commit": commit_id, "files": files}
-    text = json.dumps(obj, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False)
+    text = json.dumps(
+        obj, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False
+    )
     return (text + "\n").encode("utf-8")
 
 
@@ -89,7 +95,9 @@ def parse_lock(data: bytes, what: str = "bvc.lock") -> LockFile:
             if type(size) is not int or size < 0:
                 raise UnsafePath("")
             entries[path] = LockEntry(
-                size=size, sha256=check_sha(e.get("sha256")), manifest=check_sha(e.get("manifest"))
+                size=size,
+                sha256=check_sha(e.get("sha256")),
+                manifest=check_sha(e.get("manifest")),
             )
         except UnsafePath:
             raise CorruptData(f"{what}: {path} の記録が不正です", path=path) from None
@@ -131,12 +139,18 @@ def read_lockstate(bvc_dir: Path) -> tuple[bool, str | None]:
     except FileNotFoundError:
         return False, None
     except (CorruptData, UnsafePath) as e:
-        logger.warning("%s を読み込めません(%s)。次に bvc.lock を書くときに作り直します", LOCKSTATE, e)
+        logger.warning(
+            "%s を読み込めません(%s)。次に bvc.lock を書くときに作り直します",
+            LOCKSTATE,
+            e,
+        )
         return True, None
 
 
 def write_lockstate(bvc_dir: Path, th: str | None) -> None:
-    atomic_write_json(bvc_dir / LOCKSTATE, {"format": 1, "tree_hash": th}, bvc_dir / "tmp")
+    atomic_write_json(
+        bvc_dir / LOCKSTATE, {"format": 1, "tree_hash": th}, bvc_dir / "tmp"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +165,9 @@ class Git:
     def __init__(self, workdir: Path):
         self.workdir = workdir
 
-    def run(self, *args: str, input: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    def run(
+        self, *args: str, input: bytes | None = None, check: bool = True
+    ) -> subprocess.CompletedProcess:
         try:
             cp = subprocess.run(
                 ["git", *args],
@@ -161,10 +177,14 @@ class Git:
                 capture_output=True,
             )
         except OSError as e:
-            raise GitFailed(f"git を実行できません({e})。git がインストールされ、PATH にあるか確認してください") from e
+            raise GitFailed(
+                f"git を実行できません({e})。git がインストールされ、PATH にあるか確認してください"
+            ) from e
         if check and cp.returncode != 0:
             err = cp.stderr.decode("utf-8", "replace").strip()
-            raise GitFailed(f"git {args[0]} が失敗しました(終了コード {cp.returncode}): {err}")
+            raise GitFailed(
+                f"git {args[0]} が失敗しました(終了コード {cp.returncode}): {err}"
+            )
         return cp
 
     def _out(self, *args: str) -> str:
@@ -224,8 +244,18 @@ class Git:
         # git の全履歴(全ブランチ・タグ・stash・reflog)で path が取った内容(blob)の一覧。
         # path を変更したコミットの差分から、変更前後の blob を集める。マージも各親との差分を見る。
         out = self.run(
-            "log", "--all", "--reflog", "--full-history", "-m", "--no-renames",
-            "--format=", "--raw", "--no-abbrev", "-z", "--", path,
+            "log",
+            "--all",
+            "--reflog",
+            "--full-history",
+            "-m",
+            "--no-renames",
+            "--format=",
+            "--raw",
+            "--no-abbrev",
+            "-z",
+            "--",
+            path,
         ).stdout
         blobs: set[str] = set()
         for token in out.split(b"\0"):
@@ -247,7 +277,11 @@ class Git:
         # blob の内容をまとめて読む(git cat-file --batch)。読めないものがあれば GitFailed。
         if not blobs:
             return []
-        out = self.run("cat-file", "--batch", input="".join(b + "\n" for b in blobs).encode("ascii")).stdout
+        out = self.run(
+            "cat-file",
+            "--batch",
+            input="".join(b + "\n" for b in blobs).encode("ascii"),
+        ).stdout
         result = []
         pos = 0
         for b in blobs:
@@ -301,7 +335,9 @@ def append_line(name: str, workdir: Path, command: str | None = None) -> str:
     return f"{line} || exit $?" if name == "pre-commit" else line
 
 
-def install_hooks(hooks_dir: Path, workdir: Path, command: str | None = None) -> HooksResult:
+def install_hooks(
+    hooks_dir: Path, workdir: Path, command: str | None = None
+) -> HooksResult:
     # フックを設置する。無ければ作り、bvc のフックがあれば何もしない。
     # 別の内容のフックは上書きせず、追記すべき行を返す。
     result = HooksResult(changed=False, hooks_dir=str(hooks_dir))
@@ -321,7 +357,9 @@ def install_hooks(hooks_dir: Path, workdir: Path, command: str | None = None) ->
         with open(fsutil.os_path(path), "x", encoding="utf-8", newline="\n") as f:
             f.write(hook_script(name, workdir, command))
         mode = os.stat(fsutil.os_path(path)).st_mode
-        os.chmod(fsutil.os_path(path), mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.chmod(
+            fsutil.os_path(path), mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
         result.installed.append(name)
         result.changed = True
     return result

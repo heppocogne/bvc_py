@@ -7,7 +7,13 @@ from typing import Final
 from unittest import mock
 
 from bvc import fsutil
-from bvc.errors import CorruptData, IntegrityError, RevisionError, UnsafePath, UnsupportedFormat
+from bvc.errors import (
+    CorruptData,
+    IntegrityError,
+    RevisionError,
+    UnsafePath,
+    UnsupportedFormat,
+)
 from bvc.history import History, check_branch_name
 from bvc.model import Head
 from tests import helpers
@@ -19,7 +25,11 @@ def make_bvc(root: Path) -> Path:
     bvc = root / ".bvc"
     for d in ("commits", "tmp"):
         (bvc / d).mkdir(parents=True)
-    fsutil.atomic_write_json(bvc / "counters.json", {"format": 1, "next_commit": 0, "next_branch": 0}, bvc / "tmp")
+    fsutil.atomic_write_json(
+        bvc / "counters.json",
+        {"format": 1, "next_commit": 0, "next_branch": 0},
+        bvc / "tmp",
+    )
     return bvc
 
 
@@ -45,10 +55,14 @@ class HistoryTestCase(helpers.TempDirTestCase):
             self.commit(i - 1)
 
     def write_branches(self, names):
-        fsutil.atomic_write_json(self.bvc / "branches.json", {"format": 1, "names": names}, self.bvc / "tmp")
+        fsutil.atomic_write_json(
+            self.bvc / "branches.json", {"format": 1, "names": names}, self.bvc / "tmp"
+        )
 
     def discard(self, cid):
-        fsutil.append_jsonl(self.bvc / "discarded.jsonl", {"format": 1, "time": "t", "id": cid})
+        fsutil.append_jsonl(
+            self.bvc / "discarded.jsonl", {"format": 1, "time": "t", "id": cid}
+        )
 
 
 class TestBranchRule(HistoryTestCase):
@@ -116,7 +130,19 @@ class TestRevision(HistoryTestCase):
         self.assertEqual(self.r("1+", at=1, branch=1), 4)
 
     def test_f5_errors(self):
-        for expr in ("99", "0-", "3+", "5+", "", "@x", "-", "01", "nobranch", "@-3", "a b"):
+        for expr in (
+            "99",
+            "0-",
+            "3+",
+            "5+",
+            "",
+            "@x",
+            "-",
+            "01",
+            "nobranch",
+            "@-3",
+            "a b",
+        ):
             with self.subTest(expr=expr), self.assertRaises(RevisionError):
                 self.r(expr)
 
@@ -170,7 +196,13 @@ class TestBrokenCommit(HistoryTestCase):
         self.linear(3)
         path = self.bvc / "commits" / "2.json"
         original = json.loads(path.read_text("utf-8"))
-        for patch in ({"id": 5}, {"parent": 2}, {"ancestors": [0, 1]}, {"kind": "x"}, {"branch": -1}):
+        for patch in (
+            {"id": 5},
+            {"parent": 2},
+            {"ancestors": [0, 1]},
+            {"kind": "x"},
+            {"branch": -1},
+        ):
             with self.subTest(patch=patch):
                 fsutil.atomic_write_json(path, {**original, **patch}, self.bvc / "tmp")
                 with self.assertLogs("bvc.history", "WARNING"):
@@ -196,7 +228,9 @@ class TestBrokenCommit(HistoryTestCase):
 
     def test_c8_broken_jsonl_line_warns(self):
         self.linear(3)
-        (self.bvc / "discarded.jsonl").write_bytes(b"{broken\n" + fsutil.canonical_json({"format": 1, "id": 2}) + b"\n")
+        (self.bvc / "discarded.jsonl").write_bytes(
+            b"{broken\n" + fsutil.canonical_json({"format": 1, "id": 2}) + b"\n"
+        )
         with self.assertLogs("bvc.history", "WARNING"):
             h = load(self.bvc)
         self.assertTrue(h.is_discarded(2))
@@ -216,7 +250,9 @@ class TestNewCommitWriteOrder(HistoryTestCase):
         hook = helpers.FaultAt("atomic_write:2.json")
         with mock.patch.object(fsutil, "_fault_hook", hook), self.assertRaises(OSError):
             self.commit(1)
-        self.assertEqual(hook.calls[-2:], ["atomic_write:counters.json", "atomic_write:2.json"])
+        self.assertEqual(
+            hook.calls[-2:], ["atomic_write:counters.json", "atomic_write:2.json"]
+        )
         self.assertFalse((self.bvc / "commits" / "2.json").exists())
         h = load(self.bvc)
         self.assertEqual(self.commit(1, h=h).id, 3)
@@ -224,7 +260,11 @@ class TestNewCommitWriteOrder(HistoryTestCase):
     def test_stale_counters_never_overwrite(self):
         self.linear(3)
         before = (self.bvc / "commits" / "2.json").read_bytes()
-        fsutil.atomic_write_json(self.bvc / "counters.json", {"format": 1, "next_commit": 1, "next_branch": 0}, self.bvc / "tmp")
+        fsutil.atomic_write_json(
+            self.bvc / "counters.json",
+            {"format": 1, "next_commit": 1, "next_branch": 0},
+            self.bvc / "tmp",
+        )
         h = load(self.bvc)
         c = self.commit(2, h=h)
         self.assertEqual(c.id, 3)
@@ -268,7 +308,9 @@ class TestNotesDiscardBranches(HistoryTestCase):
     def test_c8_invalid_note_records_are_skipped(self):
         self.linear(1)
         self.h.add_note(0, "ok")
-        fsutil.append_jsonl(self.bvc / "notes" / "0.jsonl", {"format": 1, "time": "t", "text": 5})
+        fsutil.append_jsonl(
+            self.bvc / "notes" / "0.jsonl", {"format": 1, "time": "t", "text": 5}
+        )
         with self.assertLogs("bvc.history", "WARNING"):
             self.assertEqual([n.text for n in self.h.get_notes(0)], ["ok"])
 
@@ -288,7 +330,9 @@ class TestNotesDiscardBranches(HistoryTestCase):
         self.linear(2)
         self.assertIsNone(self.h.name_branch(0, "main"))
         b1 = self.commit(0).branch  # 0 には子があるので新しいブランチ
-        self.assertEqual(self.h.name_branch(b1, "main"), 0)  # 付け替え(元のブランチ番号を返す)
+        self.assertEqual(
+            self.h.name_branch(b1, "main"), 0
+        )  # 付け替え(元のブランチ番号を返す)
         self.h.name_branch(b1, "feat")  # 1つのブランチに名前は1つ
         data = json.loads((self.bvc / "branches.json").read_text("utf-8"))
         self.assertEqual(data["names"], {str(b1): "feat"})
@@ -308,7 +352,8 @@ class TestNotesDiscardBranches(HistoryTestCase):
             h = load(self.bvc)
         self.assertFalse(h.tree_known(1))
         self.assertEqual(
-            [p.relative_to(self.bvc).as_posix() for p in h.commit_paths(1)], ["commits/1.json", "notes/1.jsonl"]
+            [p.relative_to(self.bvc).as_posix() for p in h.commit_paths(1)],
+            ["commits/1.json", "notes/1.jsonl"],
         )
 
 
@@ -316,7 +361,9 @@ class TestControlRecovery(HistoryTestCase):
     # M4-10: 管理ファイルの検査と作り直し(C-7、設計書 4.12節)。
 
     def log(self, **entry):
-        self.h.log_op({"op": "x", "created": [], "before": None, "after": None, **entry})
+        self.h.log_op(
+            {"op": "x", "created": [], "before": None, "after": None, **entry}
+        )
 
     def test_check_branches(self):
         self.assertIsNotNone(self.h.check_branches())  # 無い
@@ -332,10 +379,12 @@ class TestControlRecovery(HistoryTestCase):
             self.h.check_branches()
 
     def test_rebuild_counters(self):
-        self.linear(3)                     # 版 0..2、ブランチ 0
+        self.linear(3)  # 版 0..2、ブランチ 0
         self.log(created=[7], after={"at": 2, "branch": 5})
         self.discard(2)
-        fsutil.append_jsonl(self.bvc / "discarded.jsonl", {"format": 1, "time": "t", "id": 9})
+        fsutil.append_jsonl(
+            self.bvc / "discarded.jsonl", {"format": 1, "time": "t", "id": 9}
+        )
         (self.bvc / "counters.json").write_bytes(b"{")
         self.assertIsNotNone(self.h.check_counters())
         h = load(self.bvc)
@@ -359,7 +408,9 @@ class TestControlRecovery(HistoryTestCase):
         self.log(after={"at": 1, "branch": 0})
         self.log()  # after の無い記録は飛ばす
         self.assertEqual(h.head_from_oplog(), Head(1, 0))
-        self.log(after={"at": 2, "branch": 0})  # 最後の after が削除済みの版なら使わない
+        self.log(
+            after={"at": 2, "branch": 0}
+        )  # 最後の after が削除済みの版なら使わない
         self.assertIsNone(h.head_from_oplog())
 
 
@@ -380,14 +431,24 @@ class TestPins(HistoryTestCase):
 
     def test_pin_rejects_invalid_values(self):
         c = self.commit(None)
-        for git, cid, th in (("x" * 40, c.id, SHA), ("B" * 40, c.id, SHA), ("b" * 40, 99, SHA),
-                             ("b" * 40, c.id, "x")):
-            with self.subTest(git=git, cid=cid, th=th), self.assertRaises((UnsafePath, RevisionError)):
+        for git, cid, th in (
+            ("x" * 40, c.id, SHA),
+            ("B" * 40, c.id, SHA),
+            ("b" * 40, 99, SHA),
+            ("b" * 40, c.id, "x"),
+        ):
+            with (
+                self.subTest(git=git, cid=cid, th=th),
+                self.assertRaises((UnsafePath, RevisionError)),
+            ):
                 self.h.pin(git, cid, th)
         self.assertFalse((self.bvc / "pins.jsonl").exists())
 
     def test_invalid_pin_record_is_skipped(self):
         c = self.commit(None)
-        fsutil.append_jsonl(self.bvc / "pins.jsonl", {"format": 1, "git": "../x", "bvc": c.id, "tree_hash": SHA})
+        fsutil.append_jsonl(
+            self.bvc / "pins.jsonl",
+            {"format": 1, "git": "../x", "bvc": c.id, "tree_hash": SHA},
+        )
         with self.assertLogs("bvc.history", "WARNING"):
             self.assertEqual(load(self.bvc).pins(), [])

@@ -34,7 +34,9 @@ class GitRepo:
     # テスト用の git リポジトリ兼 bvc の作業フォルダ。
     def __init__(self, root: Path):
         self.root = root
-        pythonpath = os.pathsep.join(p for p in (str(SRC), os.environ.get("PYTHONPATH")) if p)
+        pythonpath = os.pathsep.join(
+            p for p in (str(SRC), os.environ.get("PYTHONPATH")) if p
+        )
         self.env = dict(os.environ, PYTHONPATH=pythonpath, PYTHONIOENCODING="utf-8")
 
     def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -48,7 +50,9 @@ class GitRepo:
             errors="replace",
         )
         if check and cp.returncode != 0:
-            raise AssertionError(f"git {' '.join(args)} が失敗しました\n{cp.stdout}\n{cp.stderr}")
+            raise AssertionError(
+                f"git {' '.join(args)} が失敗しました\n{cp.stdout}\n{cp.stderr}"
+            )
         return cp
 
     def bvc(self, *args: str) -> tuple[int, str, str]:
@@ -133,7 +137,9 @@ def test_g1_lock_follows_head(g_nohooks: GitRepo) -> None:
     g = g_nohooks
     lock = g.lock()
     assert lock.bvc_commit == 0 and lock.files["a.bin"].sha256 == sha(V1)
-    assert json.loads(g.read(".bvc/lockstate.json"))["tree_hash"] == gitlink.tree_hash(lock.tree)
+    assert json.loads(g.read(".bvc/lockstate.json"))["tree_hash"] == gitlink.tree_hash(
+        lock.tree
+    )
 
     g.write("a.bin", V2)
     assert g.bvc("commit", "-m", "v2")[0] == 0
@@ -149,7 +155,9 @@ def test_g1_lock_follows_head(g_nohooks: GitRepo) -> None:
     assert g.bvc("--json", "log")[1].count('"lock_status": "ok"') == 1
 
 
-def test_r1_lock_write_failure_is_repaired_on_open(g_nohooks: GitRepo, monkeypatch) -> None:
+def test_r1_lock_write_failure_is_repaired_on_open(
+    g_nohooks: GitRepo, monkeypatch
+) -> None:
     # R-1: HEAD の更新後、bvc.lock を書く前に失敗しても、次に開いたときに書き直す
     g = g_nohooks
     g.write("a.bin", V2)
@@ -181,7 +189,9 @@ def test_g2_checkout_restores_binaries(g: GitRepo) -> None:
     assert g.read("a.bin") == V1
     assert "版 0 に移動しました" in cp.stdout + cp.stderr
     assert "上書き" not in cp.stderr and "非同期" not in cp.stderr
-    assert g.git("status", "--porcelain", "bvc.lock").stdout == ""  # bvc.lock は git の内容のまま
+    assert (
+        g.git("status", "--porcelain", "bvc.lock").stdout == ""
+    )  # bvc.lock は git の内容のまま
     with g.open() as repo:
         auto = [e.commit for e in repo.log() if e.commit.message == "auto: before sync"]
         assert len(auto) == 1
@@ -201,7 +211,9 @@ def test_g3_pre_commit_snapshot_and_pin(g: GitRepo) -> None:
     g.write("a.bin", V2)
     g.write("code.txt", b"code2\n")
     g.git_commit("c2", "code.txt", "bvc.lock")
-    committed = gitlink.parse_lock(g.git("show", "HEAD:bvc.lock").stdout.encode("utf-8"))
+    committed = gitlink.parse_lock(
+        g.git("show", "HEAD:bvc.lock").stdout.encode("utf-8")
+    )
     with g.open() as repo:
         head = repo._history.head()
         c = repo.get_commit(head.at)
@@ -307,12 +319,22 @@ def test_g4_unreadable_lock_in_history_deletes_nothing(g_nohooks: GitRepo) -> No
 
 
 def _write_lock(g: GitRepo, files: dict, commit: int | None = 0) -> None:
-    g.write("bvc.lock", json.dumps({"format": 1, "bvc_commit": commit, "files": files}).encode())
+    g.write(
+        "bvc.lock",
+        json.dumps({"format": 1, "bvc_commit": commit, "files": files}).encode(),
+    )
 
 
 @pytest.mark.parametrize(
     "case",
-    ["unknown_manifest", "partial", "hand_edited", "unsafe_path", "unknown_format", "broken_json"],
+    [
+        "unknown_manifest",
+        "partial",
+        "hand_edited",
+        "unsafe_path",
+        "unknown_format",
+        "broken_json",
+    ],
 )
 def test_g5_sync_changes_nothing(g_nohooks: GitRepo, case: str) -> None:
     g = g_nohooks
@@ -345,7 +367,9 @@ def test_g5_sync_changes_nothing(g_nohooks: GitRepo, case: str) -> None:
 
 def test_g5_overwriting_out_of_sync_lock_is_logged(g_nohooks: GitRepo) -> None:
     g = g_nohooks
-    _write_lock(g, {"a.bin": {"size": 1, "sha256": "c" * 64, "manifest": "d" * 64}}, commit=99)
+    _write_lock(
+        g, {"a.bin": {"size": 1, "sha256": "c" * 64, "manifest": "d" * 64}}, commit=99
+    )
     g.write("a.bin", V2)
     code, _, err = g.bvc("commit")
     assert code == 0 and "上書きします" in err
@@ -376,7 +400,16 @@ def test_g8_pre_commit_rejects_invalid_staged_lock(g: GitRepo, case: str) -> Non
     if case == "unknown_manifest":
         _write_lock(g, {"a.bin": {"size": 1, "sha256": "c" * 64, "manifest": "d" * 64}})
     elif case == "hand_edited":
-        _write_lock(g, {"a.bin": {"size": good.size + 1, "sha256": good.sha256, "manifest": good.manifest}})
+        _write_lock(
+            g,
+            {
+                "a.bin": {
+                    "size": good.size + 1,
+                    "sha256": good.sha256,
+                    "manifest": good.manifest,
+                }
+            },
+        )
     else:
         g.write("bvc.lock", b"{")
     before = g.git("rev-parse", "HEAD").stdout
@@ -435,13 +468,17 @@ def test_g6_existing_hook_is_not_overwritten(g_nohooks: GitRepo) -> None:
     (hooks / "pre-commit").write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
     code, out, err = g.bvc("git", "install-hooks")
     assert code == 0
-    assert (hooks / "pre-commit").read_text(encoding="utf-8") == "#!/bin/sh\necho mine\n"
+    assert (hooks / "pre-commit").read_text(
+        encoding="utf-8"
+    ) == "#!/bin/sh\necho mine\n"
     assert "下記の処理を追加して下さい" in err and "git pre-commit || exit $?" in err
     assert (hooks / "post-commit").exists() and (hooks / "post-checkout").exists()
     code, out, _ = g.bvc("--json", "git", "install-hooks")
     res = json.loads(out)
     assert (res["changed"], res["already"], list(res["manual"])) == (
-        False, ["post-commit", "post-checkout"], ["pre-commit"]
+        False,
+        ["post-commit", "post-checkout"],
+        ["pre-commit"],
     )
 
 
@@ -457,12 +494,24 @@ def test_g7_works_without_git(workdir: Path, monkeypatch) -> None:
     assert not (workdir / ".bvc").exists()
     assert g.bvc("init", "--track", "*.bin")[0] == 0
     g.write("a.bin", V2)
-    for args in (("commit",), ("undo",), ("redo",), ("discard", "0"), ("gc",), ("verify",), ("log",)):
+    for args in (
+        ("commit",),
+        ("undo",),
+        ("redo",),
+        ("discard", "0"),
+        ("gc",),
+        ("verify",),
+        ("log",),
+    ):
         code, out, err = g.bvc(*args)
         assert code == 0, (args, out, err)
     assert not (workdir / "bvc.lock").exists()
     assert g.bvc("sync")[0] == 1  # git 連携が無効
-    for args in (("git", "pin"), ("git", "pre-commit"), ("git", "post-checkout", "a", "b", "1")):
+    for args in (
+        ("git", "pin"),
+        ("git", "pre-commit"),
+        ("git", "post-checkout", "a", "b", "1"),
+    ):
         assert g.bvc(*args)[0] == 0  # フック用のコマンドは何もしない
 
 
@@ -474,7 +523,9 @@ def test_init_git_installs_hooks_and_prints_gitignore(workdir: Path) -> None:
     assert code == 0, err
     assert "/.bvc/" in out and "*.bin" in out
     for name in gitlink.HOOK_NAMES:
-        assert gitlink.HOOK_MARK in (workdir / ".git" / "hooks" / name).read_text(encoding="utf-8")
+        assert gitlink.HOOK_MARK in (workdir / ".git" / "hooks" / name).read_text(
+            encoding="utf-8"
+        )
     assert g.lock().bvc_commit == 0
 
 
@@ -495,7 +546,9 @@ def test_g10_lockless_commit_roundtrip(g: GitRepo) -> None:
 
     g.write("a.bin", V3)
     assert g.bvc("commit")[0] == 0  # 版 2
-    assert not (g.root / "bvc.lock").exists()  # 作り直さない(checkout が拒否されないように)
+    assert not (
+        g.root / "bvc.lock"
+    ).exists()  # 作り直さない(checkout が拒否されないように)
     assert g.bvc("sync")[0] == 0
 
     cp = g.git("checkout", "-q", "main")  # 追跡されていない bvc.lock が無いので成功する
@@ -515,18 +568,28 @@ def test_f11_json_of_git_commands(g: GitRepo) -> None:
         return json.loads(out)
 
     assert set(json_cmd("git", "install-hooks")) == {
-        "changed", "hooks_dir", "installed", "already", "manual", "warnings"
+        "changed",
+        "hooks_dir",
+        "installed",
+        "already",
+        "manual",
+        "warnings",
     }
     g.write("a.bin", V2)
     data = json_cmd("git", "pre-commit")
     assert set(data) == {"changed", "auto_commit", "staged_ok", "warnings"}
-    assert data["changed"] and data["staged_ok"] and data["auto_commit"]["kind"] == "auto"
+    assert (
+        data["changed"] and data["staged_ok"] and data["auto_commit"]["kind"] == "auto"
+    )
     g.git("commit", "-q", "--no-verify", "-m", "c2")  # post-commit はフックで記録済み
     data = json_cmd("git", "pin")
     assert set(data) == {"changed", "pin", "warnings"}
     assert (data["changed"], data["pin"]["bvc"]) == (False, 1)  # 記録済み
     data = json_cmd("git", "post-checkout", "a", "b", "1")
-    assert set(data) == {"changed", "synced", "sync", "warnings"} and data["synced"] is False
+    assert (
+        set(data) == {"changed", "synced", "sync", "warnings"}
+        and data["synced"] is False
+    )
     data = json_cmd("sync")
     assert {"lock_found", "imported", "before", "after", "auto_commit"} <= set(data)
 
@@ -537,9 +600,18 @@ def test_post_checkout_failure_is_loud(g: GitRepo) -> None:
     g.write("code.txt", b"code2\n")
     g.git_commit("c2")
     head = g.head().at
-    g.write("bvc.lock", json.dumps(
-        {"format": 1, "bvc_commit": 0, "files": {"a.bin": {"size": 1, "sha256": "c" * 64, "manifest": "d" * 64}}}
-    ).encode())
+    g.write(
+        "bvc.lock",
+        json.dumps(
+            {
+                "format": 1,
+                "bvc_commit": 0,
+                "files": {
+                    "a.bin": {"size": 1, "sha256": "c" * 64, "manifest": "d" * 64}
+                },
+            }
+        ).encode(),
+    )
     g.git("add", "bvc.lock")
     g.git("commit", "-q", "--no-verify", "-m", "bad lock")
     g.git("checkout", "-q", "HEAD~1")
