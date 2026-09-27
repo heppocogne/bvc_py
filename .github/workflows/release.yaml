@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install package and dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run pyz tests
+        run: python -m pytest tests/integration/test_pyz.py -q
+
+      - name: Build bvc.pyz and bvc.cmd
+        run: python tools/build_pyz.py
+
+      - name: Check version consistency (tag / pyproject / pyz)
+        run: python .github/scripts/check_version.py "${{ github.ref_name }}"
+
+      - name: Check stdlib-only runtime deps
+        run: python .github/scripts/check_stdlib_only.py
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/bvc.pyz
+            dist/bvc.cmd
+          generate_release_notes: true

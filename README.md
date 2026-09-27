@@ -1,4 +1,12 @@
 # bvc_py
+![](https://github.com/heppocogne/bvc_py/actions/workflows/ci.yaml/badge.svg)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Gitleaks](https://img.shields.io/badge/protected%20by-gitleaks-blue)](https://github.com/gitleaks/gitleaks-action)
+
+![Claude](https://img.shields.io/badge/claude-%23D97757.svg?style=for-the-badge&logo=claude&logoColor=white)
+![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=ffdd54)
+![GitHub Actions](https://img.shields.io/badge/github%20actions-%232671E5.svg?style=for-the-badge&logo=githubactions&logoColor=white)
+
 大容量バイナリファイル向けの**ローカル専用**バージョン管理ツールです(Python版)。
 [Jujutsu](https://github.com/jj-vcs/jj)を参考に、ステージングなし・自動コミットありの「undo/redoの発展形」という操作感を目指しています。
 M1〜M7のマイルストーンに沿って開発中のα版で、現在の進捗は[実装計画書](docs/05_実装計画書.md)を参照して下さい。
@@ -86,5 +94,3 @@ python -m pytest
 
 ## 謝辞
 [Jujutsu](https://github.com/jj-vcs/jj)の操作感に着想を得ています。
-
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)

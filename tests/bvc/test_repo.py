@@ -534,9 +534,9 @@ class TestUndoRedoGoto(MoveTestCase):
         r = repo.commit()
         self.assertEqual(r.commit.renames, (("a.bin", "A.bin", 1.0),))
         repo.undo()
-        self.assertEqual(os.listdir(self.tmp), [".bvc", "a.bin"])
+        self.assertEqual(sorted(os.listdir(self.tmp)), [".bvc", "a.bin"])
         repo.redo()
-        self.assertEqual(os.listdir(self.tmp), [".bvc", "A.bin"])
+        self.assertEqual(sorted(os.listdir(self.tmp)), [".bvc", "A.bin"])
         self.assert_clean_at(repo, 1)
 
     def test_p9_folders_increase_and_decrease(self):
