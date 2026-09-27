@@ -7,16 +7,21 @@ jobs:
   update_toc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Update Table of Contents
         run: |
-          npm install markdown-toc
-          markdown-toc -i docs/01_要件定義書.md
-          markdown-toc -i docs/02_仕様書.md
-          markdown-toc -i docs/03_設計書.md
-          markdown-toc -i docs/04_テスト観点.md
-          markdown-toc -i docs/05_実装計画書.md
-          markdown-toc -i docs/06_実機確認手順書.md
+          npm install --no-save markdown-toc
+          doc_files=(
+            "docs/01_要件定義書.md"
+            "docs/02_仕様書.md"
+            "docs/03_設計書.md"
+            "docs/04_テスト観点.md"
+            "docs/05_実装計画書.md"
+            "docs/06_実機確認手順書.md"
+          )
+          for file in ${doc_files[@]}; do
+            npx markdown-toc -i "$file"
+          done
 
       - name: Commit & Push
         run:  |
