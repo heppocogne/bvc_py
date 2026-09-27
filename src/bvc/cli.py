@@ -377,24 +377,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="リポジトリを作成する")
     p.add_argument(
-        "path",
-        nargs="?",
-        default=None,
-        help="作業フォルダ(省略時はカレントディレクトリ。-Cでも指定可)",
-    )
-    p.add_argument(
         "--track",
-        action="append",
+        action="extend",
+        nargs="+",
         required=True,
         metavar="<パターン>",
-        help="追跡パターン(複数指定可) 例: --track '*.bin' --track '*.exe'",
+        help="追跡パターン(複数指定可) 例: --track '*.bin' '*.exe'",
     )
     p.add_argument(
         "--ignore",
-        action="append",
+        action="extend",
+        nargs="+",
         default=[],
         metavar="<パターン>",
-        help="除外パターン(複数指定可) 例: --ignore '*.txt' --ignore '*.log'",
+        help="除外パターン(複数指定可) 例: --ignore '*.txt' '*.log'",
     )
     p.add_argument(
         "--git",
@@ -628,10 +624,9 @@ def _report_error(
 
 
 def _cmd_init(args: argparse.Namespace, start: Path) -> int:
-    workdir = start / args.path if args.path else start
     hooks: HooksResult | None = None
     with Repo.init(
-        workdir,
+        start,
         track=args.track,
         ignore=args.ignore,
         git=args.git,
