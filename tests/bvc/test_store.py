@@ -561,6 +561,36 @@ class TestIterDeleteVerify(StoreTestCase):
         self.assertEqual(res.bad_manifests, [sha])
 
 
+class TestGearDedup(StoreTestCase):
+    # S-6: gear では、挿入・書き換えがあっても、変わっていないチャンクを共有する。
+    GEAR: Final[dict[str, Any]] = {
+        "name": "gear",
+        "min": 64,
+        "avg": 256,
+        "max": 2048,
+        "seed": 42,
+    }
+    compression = "none"
+
+    def test_dedup_and_roundtrip(self):
+        data = helpers.random_bytes(200_000, 21)
+        sha1, stats1 = self.put(data, self.GEAR)
+        self.assertGreater(stats1.chunks, 100)
+        self.assertEqual(self.read(sha1), data)
+
+        inserted = data[:50_000] + helpers.random_bytes(100, 22) + data[50_000:]
+        sha2, stats2 = self.put(inserted, self.GEAR)
+        self.assertEqual(self.read(sha2), inserted)
+        # 挿入位置の前後で数チャンクが変わるだけで、大半は保存済み
+        self.assertLess(stats2.new_bytes, len(data) * 0.05, stats2)
+
+        edited = bytearray(data)
+        edited[100_000] ^= 0xFF
+        sha3, stats3 = self.put(bytes(edited), self.GEAR)
+        self.assertEqual(self.read(sha3), bytes(edited))
+        self.assertLess(stats3.new_chunks, 5, stats3)
+
+
 class TestLarge(helpers.TempDirTestCase):
     @helpers.slow
     def test_whole_over_1gb_constant_memory(self):

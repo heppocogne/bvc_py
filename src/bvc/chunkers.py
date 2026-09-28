@@ -94,30 +94,37 @@ class WholeChunker(Chunker):
 class GearChunker(Chunker):
     name: ClassVar[str] = "gear"
 
+    # Gear ハッシュは 64bit で、直近 64 バイトの内容だけで決まる(古いバイトは押し出される)。
+    # このため、途中に挿入・削除があっても、その先で境界が元と揃う(再同期する)。
+    _HASH_BITS: ClassVar[int] = 64
+
     def __init__(self, min: int, avg: int, max: int, seed: int) -> None:
-        # min/avg/max はバイト単位。avg は 2 の累乗。seed は int(Rabin fingerprint テーブル生成用)。
-        if not isinstance(avg, int) or avg <= 0 or (avg & (avg - 1)) != 0:
+        # min/avg/max はバイト単位。avg は 2 の累乗。seed は int(Gear テーブル生成用)。
+        if type(avg) is not int or avg <= 0 or (avg & (avg - 1)) != 0:
             raise ValueError(
                 f"gear の avg は 2 の累乗の正の整数にしてください: {avg!r}"
             )
-        if not isinstance(min, int) or not 1 <= min <= avg:
+        if avg.bit_length() - 1 > self._HASH_BITS:
+            raise ValueError(f"gear の avg が大きすぎます(最大 2^64): {avg!r}")
+        if type(min) is not int or not 1 <= min <= avg:
             raise ValueError(
                 f"gear の min は 1 以上 avg 以下の整数にしてください: {min!r}"
             )
-        if not isinstance(max, int) or not avg <= max:
+        if type(max) is not int or not avg <= max:
             raise ValueError(f"gear の max は avg 以上の整数にしてください: {max!r}")
-        if not isinstance(seed, int):
-            raise ValueError(f"gear の seed は整数にしてください: {seed!r}")  # noqa: TRY004
+        if type(seed) is not int:
+            raise ValueError(f"gear の seed は整数にしてください: {seed!r}")
         self.min = min
         self.avg = avg
         self.max = max
         self.seed = seed
-        # avg から gear_bits を決める(例: avg=4096 → gear_bits=12)
-        self.gear_bits = (avg - 1).bit_length()
-        self.threshold = 1 << self.gear_bits
-        # seed から Rabin fingerprint テーブル生成
+        # 判定に使うマスク: ハッシュの上位 log2(avg) ビットが全て 0 なら分割点。
+        # 上位ビットは直近 64 バイト全てに依存する(下位ビットは直近数バイトにしか依存しない)。
+        bits = avg.bit_length() - 1
+        self._mask = ((1 << bits) - 1) << (self._HASH_BITS - bits)
+        # seed から Gear テーブル生成
         rng = random.Random(seed)
-        self._table = [rng.randint(0, 0xFFFFFFFF) for _ in range(256)]
+        self._table = [rng.getrandbits(self._HASH_BITS) for _ in range(256)]
 
     def params(self) -> dict:
         return {
@@ -129,28 +136,66 @@ class GearChunker(Chunker):
         }
 
     def split(self, f: BinaryIO) -> Iterator[tuple[bytes, bool]]:
-        # Rabin fingerprint ベースの rolling hash で CDC。
-        buf = bytearray()
-        fp = 0  # Rabin fingerprint
+        yield from _finish_last(self._cut(f))
+
+    def _cut(self, f: BinaryIO) -> Iterator[tuple[bytes, bool]]:
+        # 分割点で True を付けて返す。ファイル末尾の未完のチャンクは False のまま返る
+        # (呼び出し側の _finish_last が最後の断片を True にする)。
+        table = self._table
+        mask = self._mask
+        hash_mask = (1 << self._HASH_BITS) - 1
+        min_size = self.min
+        max_size = self.max
+        # min 未満では分割しないので、ハッシュは min の 64 バイト手前から計算すれば足りる
+        hash_from = min_size - self._HASH_BITS if min_size > self._HASH_BITS else 0
+        clen = 0  # 現在のチャンクの、pos までの長さ
+        fp = 0
         for piece in _read_limited(f, None):
-            for byte_val in piece:
-                # rolling hash: (fp << 8) ^ table[shift-out byte] ^ new byte
-                if buf:
-                    fp = ((fp << 8) ^ self._table[(fp >> 24) & 0xFF]) & 0xFFFFFFFF
-                fp = (fp ^ self._table[byte_val]) & 0xFFFFFFFF
-                buf.append(byte_val)
-                # avg バイト以降、分割ポイントをチェック
-                if (
-                    len(buf) >= self.avg
-                    and (fp & (self.threshold - 1)) == 0
-                    or len(buf) >= self.max
-                ):
-                    yield bytes(buf), False
-                    buf.clear()
+            n = len(piece)
+            start = 0  # piece のうち、まだ返していない部分の先頭
+            pos = 0
+            while pos < n:
+                if clen < hash_from:
+                    step = min(n - pos, hash_from - clen)
+                    pos += step
+                    clen += step
+                    continue
+                limit = min(n, pos + (max_size - clen))
+                cut = -1
+                need = min_size - clen  # 分割してよい最小の位置(pos からの距離)
+                for i in range(pos, limit):
+                    fp = ((fp << 1) + table[piece[i]]) & hash_mask
+                    if not fp & mask and i - pos + 1 >= need:
+                        cut = i + 1
+                        break
+                if cut < 0:
+                    clen += limit - pos
+                    pos = limit
+                    if clen >= max_size:
+                        cut = pos
+                else:
+                    clen += cut - pos
+                    pos = cut
+                if cut >= 0:
+                    yield piece[start:cut], True
+                    start = pos
+                    clen = 0
                     fp = 0
-        # 残り
-        if buf:
-            yield bytes(buf), True
+            if start < n:
+                yield piece[start:], False
+
+
+def _finish_last(
+    parts: Iterator[tuple[bytes, bool]],
+) -> Iterator[tuple[bytes, bool]]:
+    # 最後の断片は、ファイル末尾なのでチャンク終端として返す(1つ先読みする)。
+    prev = None
+    for part in parts:
+        if prev is not None:
+            yield prev
+        prev = part
+    if prev is not None:
+        yield prev[0], True
 
 
 CHUNKERS: Final[dict[str, type[Chunker]]] = {
