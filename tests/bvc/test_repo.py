@@ -1692,6 +1692,73 @@ class TestSkipBroken(CorruptionTestCase):
         # 経路の外(読み込み不可の版のブランチは分からない)でも、子が1つなら飛ばして進める
         self.assertEqual(repo.redo(skip_broken=True).after.at, 3)
 
+
+class TestBrokenHead(CorruptionTestCase):
+    # 現在位置(@)の版自体が壊れている場合(C-12)。作業内容を新しい版に保存でき、他の版へ移動できる。
+
+    def build(self, broken_tree=False):
+        # 版 0..3(a.bin = v<番号>)。@ = 3 の版ファイルを壊す(broken_tree なら tree に不正なパスを入れる)
+        repo = self.build_linear(3)
+        repo.close()
+        path = self.tmp / ".bvc" / "commits" / "3.json"
+        if broken_tree:
+            data = json.loads(path.read_text("utf-8"))
+            data["tree"]["../x.bin"] = data["tree"]["a.bin"]
+            path.write_text(json.dumps(data), "utf-8")
+        else:
+            helpers.break_json(path)
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        self.assertEqual(self.head(repo).at, 3)
+        return repo
+
+    def test_c12_commit_from_unreadable_head(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        with self.assertLogs("bvc.repo", "WARNING"):
+            r = repo.commit("save")
+        self.assertTrue(r.changed)
+        self.assertEqual((r.commit.id, r.commit.parent), (4, 3))
+        # 版 3 の祖先は操作ログから補う(版 2 以前とのつながりを保つ)
+        self.assertEqual(r.commit.ancestors, (3, 2, 1, 0))
+        self.assertEqual(r.state.added, ["a.bin"])
+        self.assert_clean_at(repo, 4)
+        self.assertEqual(repo.undo(skip_broken=True).after.at, 2)
+        self.assertEqual(self.files(), {"a.bin": b"v2"})
+        repo.goto("4")
+        self.assertEqual(self.files(), {"a.bin": b"edit"})
+
+    def test_c12_commit_without_edit_leaves_broken_head(self):
+        # 内容が変わっていなくても、壊れた版に留まらないよう新しい版を作る
+        repo = self.build()
+        with self.assertLogs("bvc.repo", "WARNING"):
+            r = repo.commit()
+        self.assertTrue(r.changed)
+        self.assert_clean_at(repo, 4)
+        self.assertEqual(repo.commit().changed, False)
+
+    def test_c12_move_from_unreadable_head_auto_commits(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        with self.assertLogs("bvc.repo", "WARNING"):
+            r = repo.undo()
+        self.assertEqual((r.auto_commit.id, r.auto_commit.parent), (4, 3))
+        self.assert_clean_at(repo, 2)
+        self.assertEqual(self.files(), {"a.bin": b"v2"})
+        repo.goto("4")
+        self.assertEqual(self.files(), {"a.bin": b"edit"})
+
+    def test_c12_move_without_edit_from_broken_tree_head(self):
+        # tree に不正な値がある版からも、作業内容を自動コミットしてから移動する
+        repo = self.build(broken_tree=True)
+        with self.assertLogs("bvc.repo", "WARNING"):
+            r = repo.goto("1")
+        self.assertEqual(r.auto_commit.id, 4)
+        self.assertEqual(sorted(r.auto_commit.tree), ["a.bin"])
+        self.assert_clean_at(repo, 1)
+        repo.goto("4")
+        self.assertEqual(self.files(), {"a.bin": b"v3"})
+
     def test_corruption_found_in_staging(self):
         # 事前検査(存在とヘッダ)を通っても、展開時の照合で見つかれば中止する。作業ファイルは未着手
         repo = self.build_linear(3)

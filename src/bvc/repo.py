@@ -556,9 +556,21 @@ class Repo:
     def work_state(self) -> WorkState:
         # 未コミットの変更を調べる(保存はしない)。
         head = self._history.head()
+        base_tree = self._base_tree(head)
         return self._worktree.state(
-            base_tree=self._history.get(head.at).tree, store_chunks=False
+            base_tree={} if base_tree is None else base_tree, store_chunks=False
         )
+
+    def _base_tree(self, head: Head) -> dict[str, str] | None:
+        # 変更検出の基準にする現在位置の版の tree。版ファイルが読めない、または tree に不正な値があって
+        # 内容を把握できないときは None(呼び出し側は空の tree を基準にし、作業ファイル全体を新しい版に記録する)。
+        h = self._history
+        if h.tree_known(head.at):
+            return h.get(head.at).tree
+        logger.warning(
+            f"現在位置の版{head.at}は壊れているため、作業ファイル全体を未コミットの変更として扱います"
+        )
+        return None
 
     @staticmethod
     def _normalize_renames(
@@ -594,9 +606,9 @@ class Repo:
         # 書き込み順: チャンク → マニフェスト → counters → 版 → HEAD → bvc.lock → index → oplog(設計書 4.7節)。
         renames = self._normalize_renames(renames)
         head = self._history.head()
-        base = self._history.get(head.at)
+        base_tree = self._base_tree(head)
         state = self._worktree.state(
-            base_tree=base.tree,
+            base_tree={} if base_tree is None else base_tree,
             store_chunks=True,
             renames=renames,
             find_hints=not allow_missing,
@@ -606,7 +618,8 @@ class Repo:
         if state.missing and not allow_missing:
             raise _missing_error(state)
 
-        if not state.dirty:
+        # 現在位置の版が壊れているときは、作業内容を残すため変更の有無によらず新しい版を作る
+        if not state.dirty and base_tree is not None:
             # 内容が同じなら記録(stat キャッシュ)だけ更新する(仕様書 2.5節)
             self._worktree.update_index(state.tree, state.fs_time_ns)
             return CommitResult(changed=False, commit=None, state=state)
@@ -822,19 +835,20 @@ class Repo:
             target_tree = h.get(target_id).tree
         else:
             target_tree = import_tree
-        base = h.get(head.at)
+        known_tree = self._base_tree(head)
+        base_tree = {} if known_tree is None else known_tree
 
         # 事前検査(衝突・パス・保存データ)。ここまでは何も変えない
         files = wt.check_target(target_tree)
-        paths = set(base.tree) | set(target_tree) | set(files)
+        paths = set(base_tree) | set(target_tree) | set(files)
         # 上書き・削除し得るパスは、stat キャッシュを使わずにハッシュする(仕様書 2.8節)
         touched = {
             p
             for p in paths
-            if base.tree.get(p) != target_tree.get(p) or p not in target_tree
+            if base_tree.get(p) != target_tree.get(p) or p not in target_tree
         }
         state = wt.state(
-            base_tree=base.tree,
+            base_tree=base_tree,
             store_chunks=True,
             no_cache=touched,
             find_hints=not allow_missing,
@@ -846,7 +860,8 @@ class Repo:
         # 自動コミット。HEAD も auto に進めてから復元する(I-18)
         auto = None
         current = head
-        if state.dirty:
+        # 現在位置の版が壊れているときは、作業内容を残すため必ず自動コミットする
+        if state.dirty or known_tree is None:
             message = f"auto: before {op}" + (f" {arg}" if arg else "")
             auto = h.new_commit(
                 parent=head.at,

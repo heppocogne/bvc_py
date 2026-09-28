@@ -478,7 +478,10 @@ class History:
         else:
             if parent not in self._commits:
                 raise RevisionError(f"親の版{parent}は存在しません")
-            ancestors = (parent,) + self._chain.get(parent, ())
+            chain = self._chain.get(parent)
+            if chain is None:
+                chain = self._chain_from_oplog(parent)
+            ancestors = (parent,) + chain
             parent_commit = self._commits[parent]
             if parent_commit is not None and not self.children(parent):
                 branch = parent_commit.branch
@@ -688,6 +691,28 @@ class History:
                 return head
             return None
         return None
+
+    def _chain_from_oplog(self, commit_id: int) -> tuple[int, ...]:
+        # 祖先の列が分からない版(版ファイルが読めず、子も無い)の祖先を、その版を作った操作ログの記録から補う。
+        # created の先頭の版の親は before.at、2つ目以降は直前の版(自動コミット → import、M6-4)。
+        # 記録が見つからない・つじつまが合わないときは空(根として扱う。版のデータには影響しない)。
+        for r in reversed(self._oplog()):
+            created = r.get("created")
+            if not isinstance(created, list) or commit_id not in created:
+                continue
+            i = created.index(commit_id)
+            if i > 0:
+                parent = created[i - 1]
+            else:
+                before = r.get("before")
+                parent = before.get("at") if isinstance(before, dict) else None
+            if type(parent) is not int or not 0 <= parent < commit_id:
+                return ()
+            chain = self._chain.get(parent)
+            if parent not in self._commits or chain is None:
+                return ()
+            return (parent,) + chain
+        return ()
 
     def _oplog(self) -> list[dict]:
         records, warns = read_jsonl(self._bvc_dir / "oplog.jsonl", "oplog.jsonl")
