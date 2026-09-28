@@ -335,6 +335,9 @@ class HooksResult:
     hooks_dir: str  # フックのフォルダ
     installed: list[str] = field(default_factory=list)  # 設置したフック
     already: list[str] = field(default_factory=list)  # bvc のフックが設置済み
+    updated: list[str] = field(
+        default_factory=list
+    )  # 絶対パスの -C を相対パスに直したフック(already にも含む)
     manual: dict[str, str] = field(default_factory=dict)  # 既存のフック → 追記すべき行
 
 

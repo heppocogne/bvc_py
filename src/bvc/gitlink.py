@@ -202,6 +202,10 @@ class Git:
         # フックのフォルダ(core.hooksPath があればそれ)。
         return self.workdir / self._out("rev-parse", "--git-path", "hooks")
 
+    def workdir_prefix(self) -> str:
+        # git の作業ツリーの最上位から作業フォルダへの相対パス('/' 区切り、末尾の '/' なし)。最上位なら空文字列。
+        return self._out("rev-parse", "--show-prefix").rstrip("/")
+
     def head(self) -> str | None:
         # HEAD のコミット(まだコミットが無ければ None)。
         cp = self.run("rev-parse", "--verify", "-q", "HEAD^{commit}", check=False)
@@ -315,9 +319,21 @@ def _sh_quote(s: str) -> str:
     return f'"{s}"'
 
 
-def hook_line(name: str, workdir: Path, command: str | None = None) -> str:
-    # フックで bvc を呼ぶ1行(exec なし)。
-    cmd = f"{command or bvc_command()} -C {_sh_quote(workdir.as_posix())} git"
+# 以前の版が書き込んでいた、作業フォルダの絶対パスを指す -C(フォルダを移動すると壊れる)。
+_ABSOLUTE_C_RE: Final[re.Pattern[str]] = re.compile(
+    r' -C "(?:[A-Za-z]:|/)(?:\\.|[^"\\])*" (git (?:pre-commit|pin|post-checkout)\b)'
+)
+
+
+def _dir_option(subdir: str) -> str:
+    # フックの作業ディレクトリは git の作業ツリーの最上位なので、bvc の作業フォルダがそこと同じなら -C は要らない。
+    # 違うときだけ、最上位からの相対パスを付ける(作業ツリーごと移動・複製しても壊れない。N-50)。
+    return f" -C {_sh_quote(subdir)}" if subdir else ""
+
+
+def hook_line(name: str, subdir: str = "", command: str | None = None) -> str:
+    # フックで bvc を呼ぶ1行(exec なし)。subdir は git の作業ツリーの最上位から bvc の作業フォルダへの相対パス('/' 区切り)。
+    cmd = f"{command or bvc_command()}{_dir_option(subdir)} git"
     return {
         "pre-commit": f"{cmd} pre-commit",
         "post-commit": f"{cmd} pin",
@@ -325,37 +341,63 @@ def hook_line(name: str, workdir: Path, command: str | None = None) -> str:
     }[name]
 
 
-def hook_script(name: str, workdir: Path, command: str | None = None) -> str:
-    return f"#!/bin/sh\n{HOOK_MARK}\nexec {hook_line(name, workdir, command)}\n"
+def hook_script(name: str, subdir: str = "", command: str | None = None) -> str:
+    return f"#!/bin/sh\n{HOOK_MARK}\nexec {hook_line(name, subdir, command)}\n"
 
 
-def append_line(name: str, workdir: Path, command: str | None = None) -> str:
+def append_line(name: str, subdir: str = "", command: str | None = None) -> str:
     # 既存のフックに追記すべき行。pre-commit は失敗を git に伝える。
-    line = hook_line(name, workdir, command)
+    line = hook_line(name, subdir, command)
     return f"{line} || exit $?" if name == "pre-commit" else line
 
 
+def _drop_absolute_dir(text: str, subdir: str) -> str:
+    # 以前の版が書き込んだ絶対パスの -C を、相対パス(作業フォルダが最上位なら無し)に置き換える。
+    return _ABSOLUTE_C_RE.sub(lambda m: f"{_dir_option(subdir)} {m.group(1)}", text)
+
+
+def _rewrite_hook(path: Path, text: str) -> None:
+    # 権限(実行ビット)を保ったまま、原子的にフックの中身を置き換える。
+    mode = os.stat(fsutil.os_path(path)).st_mode
+    fsutil.atomic_write(path, text.encode("utf-8"), path.parent)
+    os.chmod(fsutil.os_path(path), stat.S_IMODE(mode))
+
+
 def install_hooks(
-    hooks_dir: Path, workdir: Path, command: str | None = None
+    hooks_dir: Path, subdir: str = "", command: str | None = None
 ) -> HooksResult:
     # フックを設置する。無ければ作り、bvc のフックがあれば何もしない。
     # 別の内容のフックは上書きせず、追記すべき行を返す。
+    # 以前の版が書いた絶対パスの -C は、行の該当部分だけを相対パスに直す(それ以外の内容は変えない)。
     result = HooksResult(changed=False, hooks_dir=str(hooks_dir))
     fsutil.makedirs(hooks_dir)
     for name in HOOK_NAMES:
         path = hooks_dir / name
         try:
-            text = fsutil.read_bytes(path).decode("utf-8", "replace")
+            raw = fsutil.read_bytes(path)
         except FileNotFoundError:
-            text = None
-        if text is not None:
-            if HOOK_MARK in text or hook_line(name, workdir, command) in text:
+            raw = None
+        if raw is not None:
+            text = raw.decode("utf-8", "replace")
+            fixed = _drop_absolute_dir(text, subdir)
+            legacy = fixed != text
+            if legacy and "�" not in text:
+                _rewrite_hook(path, fixed)
+                result.updated.append(name)
+                result.changed = True
+                text = fixed
+            # 絶対パスの -C を持っていた行は、以前の版が設置した bvc の行なので、設置済みとみなす
+            if (
+                legacy
+                or HOOK_MARK in text
+                or hook_line(name, subdir, command) in text
+            ):
                 result.already.append(name)
             else:
-                result.manual[name] = append_line(name, workdir, command)
+                result.manual[name] = append_line(name, subdir, command)
             continue
         with open(fsutil.os_path(path), "x", encoding="utf-8", newline="\n") as f:
-            f.write(hook_script(name, workdir, command))
+            f.write(hook_script(name, subdir, command))
         mode = os.stat(fsutil.os_path(path)).st_mode
         os.chmod(
             fsutil.os_path(path), mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH

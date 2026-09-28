@@ -93,7 +93,9 @@ class GitRepo:
     def install_hooks(self) -> None:
         cmd = f'"{Path(sys.executable).as_posix()}" -m bvc'
         with self.open() as repo:
-            gitlink.install_hooks(repo._git.hooks_dir(), self.root, cmd)
+            gitlink.install_hooks(
+                repo._git.hooks_dir(), repo._git.workdir_prefix(), cmd
+            )
 
     def git_commit(self, msg: str, *add: str) -> subprocess.CompletedProcess:
         self.git("add", *(add or ("-A",)))
@@ -483,6 +485,63 @@ def test_g6_existing_hook_is_not_overwritten(g_nohooks: GitRepo) -> None:
     )
 
 
+def test_hooks_survive_moving_and_copying_the_folder(g: GitRepo, tmp_path: Path) -> None:
+    # N-50: フックは作業フォルダの絶対パスを持たない。移動・複製後も、そのフォルダ自身を操作する
+    for name in gitlink.HOOK_NAMES:
+        text = (g.root / ".git" / "hooks" / name).read_text(encoding="utf-8")
+        assert " -C " not in text and str(g.root.as_posix()) not in text
+    copy = tmp_path / "copy"
+    shutil.copytree(g.root, copy)
+    c = GitRepo(copy)
+    c.write("a.bin", V2)
+    c.write("code.txt", b"code2\n")
+    assert c.git_commit("c2").returncode == 0  # コピー側の pre-commit が、コピー側の bvc を動かす
+    assert c.head().at == 1
+    assert g.head().at == 0  # 元のフォルダは変わらない
+    assert g.read("a.bin") == V1
+
+
+def test_hooks_in_subfolder_use_relative_dir(workdir: Path) -> None:
+    # bvc の作業フォルダが git の作業ツリーの最上位でなければ、最上位からの相対パスで -C を付ける
+    top = workdir
+    sub = top / "sub" / "dir"
+    sub.mkdir(parents=True)
+    GitRepo(top).git("init", "-q")
+    g = GitRepo(sub)
+    g.write("a.bin", V1)
+    assert g.bvc("init", "--track", "*.bin", "--git")[0] == 0
+    text = (top / ".git" / "hooks" / "pre-commit").read_text(encoding="utf-8")
+    assert ' -C "sub/dir" git pre-commit' in text
+
+
+def test_install_hooks_fixes_legacy_absolute_dir(g_nohooks: GitRepo) -> None:
+    # 以前の版が書いた絶対パスの -C は、再実行で相対パス(無し)に直る。それ以外の内容は変えない
+    g = g_nohooks
+    hooks = g.root / ".git" / "hooks"
+    legacy = f'python -m bvc -C "{g.root.as_posix()}" git'
+    (hooks / "pre-commit").write_text(
+        f"#!/bin/sh\n{gitlink.HOOK_MARK}\nexec {legacy} pre-commit\n", encoding="utf-8"
+    )
+    (hooks / "post-commit").write_text(
+        f"#!/bin/sh\necho mine\n{legacy} pin\n", encoding="utf-8"
+    )
+    code, out, err = g.bvc("--json", "git", "install-hooks")
+    res = json.loads(out)
+    assert code == 0
+    assert (res["changed"], res["updated"], list(res["manual"])) == (
+        True,
+        ["pre-commit", "post-commit"],
+        [],
+    )
+    assert (hooks / "pre-commit").read_text(encoding="utf-8") == (
+        f"#!/bin/sh\n{gitlink.HOOK_MARK}\nexec python -m bvc git pre-commit\n"
+    )
+    assert (hooks / "post-commit").read_text(encoding="utf-8") == (
+        "#!/bin/sh\necho mine\npython -m bvc git pin\n"
+    )
+    assert json.loads(g.bvc("--json", "git", "install-hooks")[1])["changed"] is False
+
+
 # --- G-7: git が無い環境 ---
 
 
@@ -573,6 +632,7 @@ def test_f11_json_of_git_commands(g: GitRepo) -> None:
         "hooks_dir",
         "installed",
         "already",
+        "updated",
         "manual",
         "warnings",
     }

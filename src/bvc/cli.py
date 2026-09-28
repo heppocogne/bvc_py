@@ -917,6 +917,10 @@ def _log_hooks(r: HooksResult) -> None:
         logger.info(
             f"gitのフックを設置しました: {', '.join(r.installed)}({r.hooks_dir})"
         )
+    if r.updated:
+        logger.info(
+            f"フックの作業フォルダの指定を、絶対パスから相対パスに直しました: {', '.join(r.updated)}"
+        )
     if r.already:
         logger.info(f"設置済みのフック: {', '.join(r.already)}")
     for name, line in r.manual.items():

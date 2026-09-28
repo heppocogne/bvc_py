@@ -151,11 +151,15 @@ class TestLockFiles(helpers.TempDirTestCase):
 
 class TestHooks(helpers.TempDirTestCase):
     def test_hook_script(self):
-        wd = Path('C:/work dir/$x`y"z')
-        text = gitlink.hook_script("pre-commit", wd, "python -m bvc")
+        # 作業フォルダが git の作業ツリーの最上位なら -C は付けない(N-50)
+        text = gitlink.hook_script("pre-commit", "", "python -m bvc")
         self.assertTrue(text.startswith("#!/bin/sh\n" + gitlink.HOOK_MARK + "\n"))
+        self.assertIn("exec python -m bvc git pre-commit\n", text)
+        # 最上位でなければ、最上位からの相対パスを付ける
+        wd = 'sub dir/$x`y"z'
+        text = gitlink.hook_script("pre-commit", wd, "python -m bvc")
         self.assertIn(
-            'exec python -m bvc -C "C:/work dir/\\$x\\`y\\"z" git pre-commit\n', text
+            'exec python -m bvc -C "sub dir/\\$x\\`y\\"z" git pre-commit\n', text
         )
         self.assertTrue(gitlink.hook_line("post-commit", wd).endswith(" git pin"))
         self.assertTrue(
@@ -174,7 +178,7 @@ class TestHooks(helpers.TempDirTestCase):
         hooks = self.tmp / "hooks"
         hooks.mkdir()
         (hooks / "pre-commit").write_text("#!/bin/sh\necho mine\n")
-        r = gitlink.install_hooks(hooks, self.tmp, "python -m bvc")
+        r = gitlink.install_hooks(hooks, "", "python -m bvc")
         self.assertTrue(r.changed)
         self.assertEqual(r.installed, ["post-commit", "post-checkout"])
         self.assertEqual(list(r.manual), ["pre-commit"])
@@ -186,13 +190,49 @@ class TestHooks(helpers.TempDirTestCase):
         # 2回目は設置済み。追記済みの既存フックも設置済みとみなす
         with open(hooks / "pre-commit", "a") as f:
             f.write(r.manual["pre-commit"] + "\n")
-        r2 = gitlink.install_hooks(hooks, self.tmp, "python -m bvc")
+        r2 = gitlink.install_hooks(hooks, "", "python -m bvc")
         self.assertFalse(r2.changed)
         self.assertEqual(r2.already, list(gitlink.HOOK_NAMES))
         self.assertEqual(r2.manual, {})
 
+    def test_install_hooks_replaces_absolute_dir(self):
+        # 以前の版は作業フォルダの絶対パスを -C に書いていた。再実行で相対パスに直し、他の内容は変えない
+        hooks = self.tmp / "hooks"
+        hooks.mkdir()
+        legacy = 'python "C:/tools/bvc.pyz" -C "C:/old dir/w\\"x" git'
+        (hooks / "pre-commit").write_bytes(
+            f"#!/bin/sh\n{gitlink.HOOK_MARK}\nexec {legacy} pre-commit\r\n".encode()
+        )
+        (hooks / "post-commit").write_text(
+            f"#!/bin/sh\necho mine\n{legacy} pin\n", encoding="utf-8"
+        )
+        (hooks / "post-checkout").write_text(
+            f'#!/bin/sh\npython -m bvc -C "/home/u/w" git post-checkout "$@"\n',
+            encoding="utf-8",
+        )
+        r = gitlink.install_hooks(hooks, "sub", "python -m bvc")
+        self.assertEqual(r.updated, list(gitlink.HOOK_NAMES))
+        self.assertTrue(r.changed)
+        self.assertEqual(r.already, list(gitlink.HOOK_NAMES))
+        self.assertEqual(r.manual, {})
+        self.assertEqual(
+            (hooks / "pre-commit").read_bytes(),
+            f'#!/bin/sh\n{gitlink.HOOK_MARK}\nexec python "C:/tools/bvc.pyz" -C "sub" git pre-commit\r\n'.encode(),
+        )
+        self.assertEqual(
+            (hooks / "post-commit").read_text(encoding="utf-8"),
+            '#!/bin/sh\necho mine\npython "C:/tools/bvc.pyz" -C "sub" git pin\n',
+        )
+        self.assertIn(
+            'python -m bvc -C "sub" git post-checkout "$@"',
+            (hooks / "post-checkout").read_text(encoding="utf-8"),
+        )
+        # 2回目は何もしない
+        r2 = gitlink.install_hooks(hooks, "sub", "python -m bvc")
+        self.assertEqual((r2.changed, r2.updated), (False, []))
+
     def test_install_hooks_creates_folder(self):
-        r = gitlink.install_hooks(self.tmp / "a" / "hooks", self.tmp)
+        r = gitlink.install_hooks(self.tmp / "a" / "hooks")
         self.assertEqual(r.installed, list(gitlink.HOOK_NAMES))
         self.assertTrue((self.tmp / "a" / "hooks" / "post-checkout").is_file())
 

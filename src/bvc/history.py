@@ -237,6 +237,14 @@ class History:
             for i, a in enumerate(anc):
                 if a not in chain:
                     chain[a] = anc[i + 1 :]
+        # 子も無い読めない版(現在位置など)の祖先は、操作ログの記録から補う(小さい番号から)
+        orphans = sorted(
+            cid for cid, c in self._commits.items() if c is None and cid not in chain
+        )
+        if orphans:
+            records = self._oplog()
+            for cid in orphans:
+                chain[cid] = self._chain_from_oplog(cid, chain, records)
         self._chain = chain
 
         self._eparent = {}
@@ -478,10 +486,7 @@ class History:
         else:
             if parent not in self._commits:
                 raise RevisionError(f"親の版{parent}は存在しません")
-            chain = self._chain.get(parent)
-            if chain is None:
-                chain = self._chain_from_oplog(parent)
-            ancestors = (parent,) + chain
+            ancestors = (parent,) + self._chain.get(parent, ())
             parent_commit = self._commits[parent]
             if parent_commit is not None and not self.children(parent):
                 branch = parent_commit.branch
@@ -692,11 +697,17 @@ class History:
             return None
         return None
 
-    def _chain_from_oplog(self, commit_id: int) -> tuple[int, ...]:
+    def _chain_from_oplog(
+        self,
+        commit_id: int,
+        chain: dict[int, tuple[int, ...]],
+        records: list[dict],
+    ) -> tuple[int, ...]:
         # 祖先の列が分からない版(版ファイルが読めず、子も無い)の祖先を、その版を作った操作ログの記録から補う。
         # created の先頭の版の親は before.at、2つ目以降は直前の版(自動コミット → import、M6-4)。
+        # chain は親より小さい番号から順に埋めていくこと。
         # 記録が見つからない・つじつまが合わないときは空(根として扱う。版のデータには影響しない)。
-        for r in reversed(self._oplog()):
+        for r in reversed(records):
             created = r.get("created")
             if not isinstance(created, list) or commit_id not in created:
                 continue
@@ -708,10 +719,9 @@ class History:
                 parent = before.get("at") if isinstance(before, dict) else None
             if type(parent) is not int or not 0 <= parent < commit_id:
                 return ()
-            chain = self._chain.get(parent)
-            if parent not in self._commits or chain is None:
+            if parent not in self._commits or parent not in chain:
                 return ()
-            return (parent,) + chain
+            return (parent,) + chain[parent]
         return ()
 
     def _oplog(self) -> list[dict]:

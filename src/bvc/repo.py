@@ -1683,7 +1683,7 @@ class Repo:
     def install_hooks(self) -> HooksResult:
         # git のフックを設置する(M6-6、仕様書 3.12節)。既存のフックは上書きしない。
         git = self._require_git()
-        return gitlink.install_hooks(git.hooks_dir(), self.workdir)
+        return gitlink.install_hooks(git.hooks_dir(), git.workdir_prefix())
 
     def git_pin(self) -> PinResult:
         # post-commit: git の HEAD にある bvc.lock と内容が一致する版を pins に記録する(M6-5)。
