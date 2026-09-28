@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import unicodedata
 import unittest
-from pathlib import Path
 from typing import Final
 
 from bvc import gitlink
@@ -208,7 +207,7 @@ class TestHooks(helpers.TempDirTestCase):
             f"#!/bin/sh\necho mine\n{legacy} pin\n", encoding="utf-8"
         )
         (hooks / "post-checkout").write_text(
-            f'#!/bin/sh\npython -m bvc -C "/home/u/w" git post-checkout "$@"\n',
+            '#!/bin/sh\npython -m bvc -C "/home/u/w" git post-checkout "$@"\n',
             encoding="utf-8",
         )
         r = gitlink.install_hooks(hooks, "sub", "python -m bvc")

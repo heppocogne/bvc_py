@@ -2,6 +2,7 @@
 
 import io
 import unittest
+from typing import ClassVar
 from unittest import mock
 
 from bvc import chunkers
@@ -87,7 +88,12 @@ class TestWhole(unittest.TestCase):
 
 class TestGear(unittest.TestCase):
     # S-1, S-6: gear(CDC)の分割。分割点の終端フラグ、min/max、挿入・書き換えに対する再同期。
-    PARAMS = {"min": 64, "avg": 256, "max": 2048, "seed": 1234}
+    PARAMS: ClassVar[dict[str, int]] = {
+        "min": 64,
+        "avg": 256,
+        "max": 2048,
+        "seed": 1234,
+    }
 
     def make(self, **kw):
         return chunkers.GearChunker(**{**self.PARAMS, **kw})
@@ -157,9 +163,7 @@ class TestGear(unittest.TestCase):
 
     def test_deterministic_and_seed(self):
         data = helpers.random_bytes(50000, 6)
-        self.assertEqual(
-            chunks_of(self.make(), data), chunks_of(self.make(), data)
-        )
+        self.assertEqual(chunks_of(self.make(), data), chunks_of(self.make(), data))
         self.assertNotEqual(
             chunks_of(self.make(), data), chunks_of(self.make(seed=999), data)
         )

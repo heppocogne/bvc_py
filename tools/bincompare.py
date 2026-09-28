@@ -8,8 +8,9 @@ import json
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, Sequence
+from typing import Final
 
 # bvc のモジュールを import するため、src/ を sys.path に追加
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))

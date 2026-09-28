@@ -485,7 +485,9 @@ def test_g6_existing_hook_is_not_overwritten(g_nohooks: GitRepo) -> None:
     )
 
 
-def test_hooks_survive_moving_and_copying_the_folder(g: GitRepo, tmp_path: Path) -> None:
+def test_hooks_survive_moving_and_copying_the_folder(
+    g: GitRepo, tmp_path: Path
+) -> None:
     # N-50: フックは作業フォルダの絶対パスを持たない。移動・複製後も、そのフォルダ自身を操作する
     for name in gitlink.HOOK_NAMES:
         text = (g.root / ".git" / "hooks" / name).read_text(encoding="utf-8")
@@ -495,7 +497,9 @@ def test_hooks_survive_moving_and_copying_the_folder(g: GitRepo, tmp_path: Path)
     c = GitRepo(copy)
     c.write("a.bin", V2)
     c.write("code.txt", b"code2\n")
-    assert c.git_commit("c2").returncode == 0  # コピー側の pre-commit が、コピー側の bvc を動かす
+    assert (
+        c.git_commit("c2").returncode == 0
+    )  # コピー側の pre-commit が、コピー側の bvc を動かす
     assert c.head().at == 1
     assert g.head().at == 0  # 元のフォルダは変わらない
     assert g.read("a.bin") == V1
@@ -526,7 +530,7 @@ def test_install_hooks_fixes_legacy_absolute_dir(g_nohooks: GitRepo) -> None:
     (hooks / "post-commit").write_text(
         f"#!/bin/sh\necho mine\n{legacy} pin\n", encoding="utf-8"
     )
-    code, out, err = g.bvc("--json", "git", "install-hooks")
+    code, out, _ = g.bvc("--json", "git", "install-hooks")
     res = json.loads(out)
     assert code == 0
     assert (res["changed"], res["updated"], list(res["manual"])) == (
