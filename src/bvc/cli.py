@@ -917,7 +917,7 @@ def _log_hooks(r: HooksResult) -> None:
         logger.info(
             f"gitのフックを設置しました: {', '.join(r.installed)}({r.hooks_dir})"
         )
-    if r.updated:
+    if r.updated:  # LEGACY-HOOK-C(削除予定)
         logger.info(
             f"フックの作業フォルダの指定を、絶対パスから相対パスに直しました: {', '.join(r.updated)}"
         )

@@ -319,7 +319,8 @@ def _sh_quote(s: str) -> str:
     return f'"{s}"'
 
 
-# 以前の版が書き込んでいた、作業フォルダの絶対パスを指す -C(フォルダを移動すると壊れる)。
+# LEGACY-HOOK-C(削除予定): 以前の版が書き込んでいた、作業フォルダの絶対パスを指す -C(フォルダを移動すると壊れる)。
+# 旧形式のフックが残っていないと言える時期に、この定数と _drop_absolute_dir・_rewrite_hook ごと削除する。
 _ABSOLUTE_C_RE: Final[re.Pattern[str]] = re.compile(
     r' -C "(?:[A-Za-z]:|/)(?:\\.|[^"\\])*" (git (?:pre-commit|pin|post-checkout)\b)'
 )
@@ -352,12 +353,12 @@ def append_line(name: str, subdir: str = "", command: str | None = None) -> str:
 
 
 def _drop_absolute_dir(text: str, subdir: str) -> str:
-    # 以前の版が書き込んだ絶対パスの -C を、相対パス(作業フォルダが最上位なら無し)に置き換える。
+    # LEGACY-HOOK-C(削除予定): 以前の版が書き込んだ絶対パスの -C を、相対パス(作業フォルダが最上位なら無し)に置き換える。
     return _ABSOLUTE_C_RE.sub(lambda m: f"{_dir_option(subdir)} {m.group(1)}", text)
 
 
 def _rewrite_hook(path: Path, text: str) -> None:
-    # 権限(実行ビット)を保ったまま、原子的にフックの中身を置き換える。
+    # LEGACY-HOOK-C(削除予定): 権限(実行ビット)を保ったまま、原子的にフックの中身を置き換える。
     mode = os.stat(fsutil.os_path(path)).st_mode
     fsutil.atomic_write(path, text.encode("utf-8"), path.parent)
     os.chmod(fsutil.os_path(path), stat.S_IMODE(mode))
@@ -368,7 +369,8 @@ def install_hooks(
 ) -> HooksResult:
     # フックを設置する。無ければ作り、bvc のフックがあれば何もしない。
     # 別の内容のフックは上書きせず、追記すべき行を返す。
-    # 以前の版が書いた絶対パスの -C は、行の該当部分だけを相対パスに直す(それ以外の内容は変えない)。
+    # LEGACY-HOOK-C(削除予定): 以前の版が書いた絶対パスの -C は、行の該当部分だけを相対パスに直す(それ以外の内容は変えない)。
+    # 削除するときは、下の LEGACY-HOOK-C の範囲と `legacy or` の条件を消す。
     result = HooksResult(changed=False, hooks_dir=str(hooks_dir))
     fsutil.makedirs(hooks_dir)
     for name in HOOK_NAMES:
@@ -379,16 +381,17 @@ def install_hooks(
             raw = None
         if raw is not None:
             text = raw.decode("utf-8", "replace")
+            # LEGACY-HOOK-C(削除予定): ここから
             fixed = _drop_absolute_dir(text, subdir)
             legacy = fixed != text
-            if legacy and "�" not in text:
+            if legacy and "\N{REPLACEMENT CHARACTER}" not in text:
                 _rewrite_hook(path, fixed)
                 result.updated.append(name)
                 result.changed = True
                 text = fixed
-            # 絶対パスの -C を持っていた行は、以前の版が設置した bvc の行なので、設置済みとみなす
+            # LEGACY-HOOK-C(削除予定): ここまで
             if (
-                legacy
+                legacy  # LEGACY-HOOK-C(削除予定): 絶対パスの -C を持っていた行は、以前の版が設置した bvc の行なので設置済みとみなす
                 or HOOK_MARK in text
                 or hook_line(name, subdir, command) in text
             ):

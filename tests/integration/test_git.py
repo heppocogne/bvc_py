@@ -515,6 +515,7 @@ def test_hooks_in_subfolder_use_relative_dir(workdir: Path) -> None:
 
 
 def test_install_hooks_fixes_legacy_absolute_dir(g_nohooks: GitRepo) -> None:
+    # LEGACY-HOOK-C(削除予定): このテストごと削除する
     # 以前の版が書いた絶対パスの -C は、再実行で相対パス(無し)に直る。それ以外の内容は変えない
     g = g_nohooks
     hooks = g.root / ".git" / "hooks"
@@ -632,7 +633,7 @@ def test_f11_json_of_git_commands(g: GitRepo) -> None:
         "hooks_dir",
         "installed",
         "already",
-        "updated",
+        "updated",  # LEGACY-HOOK-C(削除予定)
         "manual",
         "warnings",
     }

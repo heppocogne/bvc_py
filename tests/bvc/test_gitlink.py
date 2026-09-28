@@ -196,6 +196,7 @@ class TestHooks(helpers.TempDirTestCase):
         self.assertEqual(r2.manual, {})
 
     def test_install_hooks_replaces_absolute_dir(self):
+        # LEGACY-HOOK-C(削除予定): このテストごと削除する
         # 以前の版は作業フォルダの絶対パスを -C に書いていた。再実行で相対パスに直し、他の内容は変えない
         hooks = self.tmp / "hooks"
         hooks.mkdir()
