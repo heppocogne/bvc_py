@@ -54,8 +54,8 @@ class TestCommands(CliTestCase):
         code, out, _ = self.bvc("log")
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertRegex(lines[0], r"^@  1  \d\d\d\d/\d\d/\d\d \d\d:\d\d  変更$")
-        self.assertRegex(lines[1], r"^○  0  .*\(init\)$")
+        self.assertRegex(lines[0], r"^@  1  変更  \d\d\d\d/\d\d/\d\d \d\d:\d\d$")
+        self.assertRegex(lines[1], r"^○  0  \(init\)  .*$")
 
     def test_f12_no_change(self):
         self.bvc("init", "--track", "*")
@@ -275,8 +275,8 @@ class TestLogTree(CliTestCase):
         self.assertEqual(
             [ln.split("  ")[0] for ln in lines[1:]], ["@", "│ ○", "├─╯", "○", "○"]
         )
-        self.assertTrue(lines[1].endswith("three"))
-        self.assertTrue(lines[2].endswith("two"))
+        self.assertIn("  three  ", lines[1])
+        self.assertIn("  two  ", lines[2])
 
     def test_render_multiple_branches(self):
         # 3 本の枝が同じ親に合流する

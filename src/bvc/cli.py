@@ -1090,11 +1090,12 @@ def _entry_text(e: LogEntry) -> str:
     if e.commit is None:
         return f"{e.id}  (読み込み不可)" + ("  (削除済み)" if e.discarded else "")
     c = e.commit
+    # 状態(行頭の @ ○ ✗) → 版 → コメント → 日時 の順
     parts = [str(e.id)]
     if e.branch_label:
         parts.append(f"[{e.branch_label}]")
-    parts.append(_short_time(c.time))
     parts.append(c.message or f"({c.kind})")
+    parts.append(_short_time(c.time))
     if e.discarded:
         parts.append("(削除済み)")
     if e.broken:
