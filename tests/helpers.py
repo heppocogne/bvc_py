@@ -13,6 +13,7 @@ import unittest
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Final, TypeVar
+from unittest import mock
 
 ENV_RUN_SLOW: Final[str] = "BVC_RUN_SLOW"
 ENV_LONG_PATH: Final[str] = "BVC_TEST_LONG_PATH"
@@ -138,13 +139,20 @@ def slow(func: _F) -> _F:
 
 class TempDirTestCase(unittest.TestCase):
     # テストごとに一時フォルダ self.tmp を作り、終了時に消す。
+    # 利用者の presets.json を読まないよう、BVC_CONFIG_DIR を空の一時フォルダ self.config_dir にする。
 
     tmp: Path
+    config_dir: Path
 
     def setUp(self) -> None:
         super().setUp()
         self.tmp = make_temp_dir()
         self.addCleanup(remove_tree, self.tmp)
+        self.config_dir = make_temp_dir("bvc-config-")
+        self.addCleanup(remove_tree, self.config_dir)
+        patcher = mock.patch.dict(os.environ, {"BVC_CONFIG_DIR": str(self.config_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 def make_temp_dir(prefix: str = "bvc-test-") -> Path:

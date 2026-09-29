@@ -1,4 +1,4 @@
-# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-11, M5-1〜M5-3)。観点: F-1, F-6, F-7, F-11, F-12, F-14, P-5, C-2, C-6。
+# cli の単体テスト(M2-11, M2-12, M3-8, M4-1〜M4-11, M5-1〜M5-3)。観点: F-1, F-6, F-7, F-11, F-12, F-14, F-15, F-16, P-5, C-2, C-6。
 
 import dataclasses
 import io
@@ -95,6 +95,72 @@ class TestCommands(CliTestCase):
         code, _, _ = self.bvc("init")
         self.assertEqual(code, 2)
         self.assertFalse((self.tmp / ".bvc").exists())
+
+    def test_f15_init_preset(self):
+        self.write("a.docx")
+        self.write("b.bin")
+        code, out, err = self.bvc("init", "--preset", "office", "--track", "*.bin")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("追跡ファイル2件", out)
+
+    def test_f15_init_unknown_preset(self):
+        code, _, err = self.bvc("init", "--preset", "nope")
+        self.assertEqual(code, 2)
+        self.assertIn("--preset", err)
+        self.assertFalse((self.tmp / ".bvc").exists())
+
+    def test_f16_preset_list_and_show(self):
+        # ファイルが無ければ、場所と書き方の例を表示する(リポジトリは不要)
+        code, out, _ = self.bvc("preset")
+        self.assertEqual(code, 0)
+        self.assertIn(str(self.config_dir / "presets.json"), out)
+        self.assertIn("(未作成)", out)
+        self.assertIn('"format": 1', out)
+
+        (self.config_dir / "presets.json").write_text(
+            json.dumps(
+                {
+                    "format": 1,
+                    "presets": {
+                        "cad": {"description": "CAD", "include": ["image"]},
+                        "office": {"include": ["office"], "track": ["**/*.pdf"]},
+                    },
+                }
+            ),
+            "utf-8",
+        )
+        code, out, _ = self.bvc("preset", "list")
+        self.assertEqual(code, 0)
+        self.assertIn("cad     CAD(ユーザー定義)", out)
+        self.assertIn("(ユーザー定義。組み込みを上書き)", out)
+        self.assertNotIn("未作成", out)
+
+        code, out, _ = self.bvc("preset", "show", "cad")
+        self.assertEqual(code, 0)
+        self.assertIn("include: image", out)
+        self.assertIn("  **/*.psd", out)
+
+        code, out, _ = self.bvc("--json", "preset")
+        data = json.loads(out)
+        self.assertEqual((code, data["file_exists"]), (0, True))
+        self.assertEqual(
+            [p["name"] for p in data["presets"]], ["office", "image", "cad"]
+        )
+        code, out, _ = self.bvc("--json", "preset", "show", "office")
+        self.assertEqual(json.loads(out)["preset"]["track"][-1], "**/*.pdf")
+
+        code, _, err = self.bvc("preset", "show", "nope")
+        self.assertEqual(code, 2)
+        self.assertIn("不明なプリセット", err)
+
+    def test_f16_init_user_preset(self):
+        (self.config_dir / "presets.json").write_text(
+            '{"format": 1, "presets": {"cad": {"track": ["**/*.dwg"]}}}', "utf-8"
+        )
+        self.write("x/a.dwg")
+        code, out, err = self.bvc("init", "--preset", "cad")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("追跡ファイル1件", out)
 
     def test_init_twice_is_error(self):
         self.bvc("init", "--track", "*")

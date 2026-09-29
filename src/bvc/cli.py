@@ -32,12 +32,14 @@ from .model import (
     HooksResult,
     LogEntry,
     MoveResult,
+    PresetInfo,
+    PresetList,
     ProgressEvent,
     SyncResult,
     VerifyReport,
     WorkState,
 )
-from .repo import Repo
+from .repo import PRESETS, Repo, load_presets
 
 # 成功
 EXIT_OK: Final[int] = 0
@@ -375,15 +377,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", metavar="<コマンド>", title="コマンド")
 
-    p = sub.add_parser("init", help="リポジトリを作成する")
+    p = sub.add_parser(
+        "init",
+        help="リポジトリを作成する",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="組み込みのプリセット:\n"
+        + "\n".join(f"  {k:<8}{v.description}" for k, v in PRESETS.items())
+        + "\nユーザー定義のプリセットも使えます(一覧とファイルの場所: bvc preset list)",
+    )
     p.add_argument(
         "--track",
         action="extend",
         nargs="+",
-        required=True,
+        default=[],
         metavar="<パターン>",
-        help="追跡パターン(複数指定可) 例: --track '*.bin' '*.exe'",
+        help="追跡パターン(複数指定可。--presetが無ければ必須) 例: --track '*.bin' '*.exe'",
     )
+    p.add_argument(
+        "--preset",
+        action="extend",
+        nargs="+",
+        default=[],
+        metavar="<名前>",
+        help="用途別の追跡・除外パターンを加える(複数指定可。一覧: bvc preset list)",
+    )
+
+    def check_init(args: argparse.Namespace, p: argparse.ArgumentParser = p) -> None:
+        if not (args.track or args.preset):
+            p.error("--trackか--presetを指定してください")
+
+    p.set_defaults(check=check_init)
     p.add_argument(
         "--ignore",
         action="extend",
@@ -397,6 +420,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="git連携を有効にし、bvc.lockを作ってフックを設置する",
     )
+
+    p = sub.add_parser("preset", help="init --presetで使えるプリセットを表示する")
+    psub = p.add_subparsers(
+        dest="preset_command", metavar="<操作>", title="操作(省略時は一覧)"
+    )
+    psub.add_parser(
+        "list", help="プリセットの一覧と、ユーザー定義のファイルの場所を表示する"
+    )
+    pp = psub.add_parser("show", help="プリセットの追跡・除外パターンを表示する")
+    pp.add_argument("name", metavar="<名前>", help="プリセットの名前")
 
     p = sub.add_parser("commit", help="追跡ファイルの現状を版として記録する")
     p.add_argument("-m", "--message", default="", help="メッセージ")
@@ -539,6 +572,9 @@ def run(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     try:
         args = parser.parse_args(raw)
+        # argparse だけでは表せない引数の組み合わせの検査(init の --track / --preset)
+        if hasattr(args, "check"):
+            args.check(args)
     except SystemExit as e:
         # サブコマンドの --help など
         return e.code if isinstance(e.code, int) else EXIT_USAGE
@@ -631,6 +667,7 @@ def _cmd_init(args: argparse.Namespace, start: Path) -> int:
         ignore=args.ignore,
         git=args.git,
         progress=args.progress,
+        presets=args.preset,
     ) as repo:
         entry = repo.log(limit=1)[0]
         if args.git:
@@ -767,6 +804,35 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
         logger.info(
             f"版{note.commit_id}({_commit_label(commit)})にコメントを追加しました"
         )
+    return EXIT_OK
+
+
+def _cmd_preset(args: argparse.Namespace, start: Path) -> int:
+    # リポジトリを開かない(作業フォルダの外でも使える)。
+    plist = load_presets()
+    if args.preset_command == "show":
+        found = [p for p in plist.presets if p.name == args.name]
+        if not found:
+            raise UsageError(
+                f"不明なプリセットです: {args.name}(使えるもの: {', '.join(p.name for p in plist.presets)})"
+            )
+        if args.json:
+            _print_json(args, {"changed": False, "preset": found[0]})
+        else:
+            _print_text(format_preset(found[0]))
+        return EXIT_OK
+    if args.json:
+        _print_json(
+            args,
+            {
+                "changed": False,
+                "file": plist.file,
+                "file_exists": plist.file_exists,
+                "presets": plist.presets,
+            },
+        )
+    else:
+        _print_text(format_presets(plist))
     return EXIT_OK
 
 
@@ -938,6 +1004,7 @@ _COMMANDS: Final[dict[str, Any]] = {
     "goto": _cmd_move,
     "note": _cmd_note,
     "branch": _cmd_branch,
+    "preset": _cmd_preset,
     "discard": _cmd_discard,
     "gc": _cmd_gc,
     "verify": _cmd_verify,
@@ -1004,6 +1071,47 @@ def format_branches(branches: list[BranchInfo]) -> str:
         lines.append(
             f"{mark} {n}{' ' * (w - _width(n))}  先端: {_or_none(b.tip)}  分岐元: {_or_none(b.fork)}"
         )
+    return "\n".join(lines)
+
+
+_PRESET_EXAMPLE: Final[str] = (
+    '{"format": 1, "presets": {"cad": {"description": "CADデータ", '
+    '"include": ["image"], "track": ["**/*.dwg"], "ignore": ["**/*.bak"]}}}'
+)
+
+
+def _preset_source(p: PresetInfo) -> str:
+    if p.source == "builtin":
+        return ""
+    return "(ユーザー定義。組み込みを上書き)" if p.overrides else "(ユーザー定義)"
+
+
+def format_presets(plist: PresetList) -> str:
+    # 仕様書 3.13節。名前と説明、最後にユーザー定義のファイルの場所。
+    w = max((_width(p.name) for p in plist.presets), default=0)
+    lines = [
+        f"{p.name}{' ' * (w - _width(p.name))}  {p.description}{_preset_source(p)}"
+        for p in plist.presets
+    ]
+    lines.append("")
+    if plist.file_exists:
+        lines.append(f"ユーザー定義のファイル: {plist.file}")
+    else:
+        lines += [
+            f"ユーザー定義のファイル: {plist.file}(未作成)",
+            "  このファイルを作ると、独自のプリセットを追加できます。例:",
+            f"  {_PRESET_EXAMPLE}",
+        ]
+    return "\n".join(lines)
+
+
+def format_preset(p: PresetInfo) -> str:
+    lines = [f"{p.name}{_preset_source(p)}: {p.description}"]
+    if p.include:
+        lines.append(f"include: {', '.join(p.include)}")
+    for label, pats in (("track", p.track), ("ignore", p.ignore)):
+        lines.append(f"{label}:" if pats else f"{label}: (なし)")
+        lines += [f"  {s}" for s in pats]
     return "\n".join(lines)
 
 

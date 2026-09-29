@@ -358,3 +358,25 @@ class PostCheckoutResult:
     changed: bool
     synced: bool = False  # sync を実行したか
     sync: SyncResult | None = None
+
+
+@dataclass(slots=True)
+class PresetInfo:
+    # init --preset で使えるプリセット1つ(preset list / show)。仕様書 3.1.1節・3.1.2節。
+
+    name: str
+    description: str
+    source: str  # "builtin"(組み込み)/ "user"(ユーザー定義)
+    overrides: bool = False  # ユーザー定義が同名の組み込みを上書きしているか
+    include: list[str] = field(default_factory=list)  # 取り込むプリセット(書かれた通り)
+    track: list[str] = field(default_factory=list)  # include を展開した追跡パターン
+    ignore: list[str] = field(default_factory=list)  # include を展開した除外パターン
+
+
+@dataclass(slots=True)
+class PresetList:
+    # 使えるプリセットの一覧と、ユーザー定義のファイルの場所。
+
+    file: str  # ユーザー定義プリセットのファイルのパス
+    file_exists: bool
+    presets: list[PresetInfo] = field(default_factory=list)

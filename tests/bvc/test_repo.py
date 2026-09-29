@@ -1,5 +1,5 @@
 # repo の単体テスト(M2-2, M2-10, M3-6, M3-7, M4-1〜M4-11)。
-# 観点: F-1, F-2, F-3, F-4, F-6, F-7, F-8, F-9, F-12, F-14, P-5, P-7, P-8, P-9,
+# 観点: F-1, F-2, F-3, F-4, F-6, F-7, F-8, F-9, F-12, F-14, F-15, F-16, P-5, P-7, P-8, P-9,
 #       R-1, R-2, R-4, R-6, R-7, R-8, R-9, R-10, R-11, C-1〜C-8, C-10, C-11。
 
 import json
@@ -29,7 +29,7 @@ from bvc.errors import (
     UsageError,
 )
 from bvc.model import BranchInfo, Head
-from bvc.repo import Repo, parse_config
+from bvc.repo import Repo, load_presets, parse_config, preset_file
 from tests import helpers
 
 
@@ -112,6 +112,153 @@ class TestInit(RepoTestCase):
         self.assertFalse((self.tmp / ".bvc").exists())
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"a")
         self.init().close()  # やり直せる
+
+
+class TestPresets(RepoTestCase):
+    # 観点 F-15
+    def test_f15_office(self):
+        for rel in ("a.docx", "sub/b.xlsx", "sub/c.odp", "sub/~$b.xlsx", "x.bin"):
+            self.write(rel)
+        repo = self.init([], presets=["office"])
+        self.assertEqual(
+            sorted(repo.log()[0].commit.tree), ["a.docx", "sub/b.xlsx", "sub/c.odp"]
+        )
+
+    def test_f15_merge_with_track_and_ignore(self):
+        repo = self.init(
+            ["**/*.docx", "*.bin"], presets=["office", "image"], ignore=["tmp/**"]
+        )
+        track, ignore = repo.config.track, repo.config.ignore
+        # プリセットの後に指定したパターンが続き、重複は1つにまとまる
+        self.assertEqual(track[0], "**/*.doc")
+        self.assertEqual(track[-1], "*.bin")
+        self.assertEqual(track.count("**/*.docx"), 1)
+        self.assertIn("**/*.psd", track)
+        self.assertEqual(
+            ignore, ["**/~$*", "**/.~lock.*#", "**/*-autosave.kra", "tmp/**"]
+        )
+        # 保存した設定を読み直しても同じ
+        self.assertEqual(self.reopen(repo).config.track, track)
+
+    def test_f15_unknown_or_empty_creates_nothing(self):
+        for kw in ({"presets": ["nope"]}, {"presets": []}):
+            with self.subTest(kw=kw), self.assertRaises(UsageError):
+                Repo.init(self.tmp, track=[], **kw)
+            self.assertFalse((self.tmp / ".bvc").exists())
+
+
+class TestUserPresets(RepoTestCase):
+    # 観点 F-16
+
+    def write_presets(self, presets, fmt=1, bom=False):
+        data = json.dumps({"format": fmt, "presets": presets}).encode("utf-8")
+        (self.config_dir / "presets.json").write_bytes(
+            (b"\xef\xbb\xbf" if bom else b"") + data
+        )
+
+    def test_f16_file_location(self):
+        self.assertEqual(preset_file(), self.config_dir / "presets.json")
+        env = {"BVC_CONFIG_DIR": "", "APPDATA": "/appdata", "XDG_CONFIG_HOME": "/xdg"}
+        with mock.patch.dict(os.environ, env):
+            expected = Path("/appdata") if os.name == "nt" else Path("/xdg")
+            self.assertEqual(preset_file(), expected / "bvc" / "presets.json")
+
+    def test_f16_no_file(self):
+        plist = load_presets()
+        self.assertFalse(plist.file_exists)
+        self.assertEqual(plist.file, str(self.config_dir / "presets.json"))
+        self.assertEqual(
+            [(p.name, p.source) for p in plist.presets],
+            [("office", "builtin"), ("image", "builtin")],
+        )
+
+    def test_f16_include_and_override(self):
+        self.write_presets(
+            {
+                "cad": {"include": ["image"], "track": ["**/*.dwg", "**/*.png"]},
+                # 自分と同じ名前の include は組み込みの office を指す
+                "office": {
+                    "description": "独自",
+                    "include": ["office"],
+                    "track": ["**/*.pdf"],
+                },
+                "both": {"include": ["cad", "office"], "ignore": ["**/*.bak"]},
+            },
+            bom=True,
+        )
+        plist = load_presets()
+        self.assertTrue(plist.file_exists)
+        by = {p.name: p for p in plist.presets}
+        self.assertEqual(list(by), ["office", "image", "cad", "both"])
+        self.assertEqual((by["office"].source, by["office"].overrides), ("user", True))
+        self.assertEqual(by["office"].track[-1], "**/*.pdf")
+        self.assertIn("**/*.docx", by["office"].track)
+        self.assertEqual(by["cad"].track[-1], "**/*.dwg")
+        self.assertEqual(by["cad"].track.count("**/*.png"), 1)
+        self.assertEqual(by["cad"].ignore, ["**/*-autosave.kra"])
+        # include したユーザー定義の office は上書き後のもの
+        self.assertIn("**/*.pdf", by["both"].track)
+        self.assertEqual(by["both"].ignore[-1], "**/*.bak")
+
+    def test_f16_init_with_user_preset(self):
+        self.write_presets(
+            {
+                "cad": {"track": ["**/*.dwg"]},
+                "office": {"include": ["office"], "track": ["**/*.pdf"]},
+            }
+        )
+        self.write("a/b.dwg")
+        self.write("c.pdf")
+        with self.assertLogs("bvc.repo", "WARNING") as cm:
+            repo = self.init([], presets=["cad", "office"])
+        self.assertIn("組み込みのofficeを上書き", "\n".join(cm.output))
+        self.assertEqual(sorted(repo.log()[0].commit.tree), ["a/b.dwg", "c.pdf"])
+
+    def test_f16_preset_without_track(self):
+        self.write_presets({"ign": {"ignore": ["**/*.tmp"]}})
+        with self.assertRaises(UsageError) as cm:
+            Repo.init(self.tmp, track=[], presets=["ign"])
+        self.assertIn("追跡パターンがありません", str(cm.exception))
+        self.assertFalse((self.tmp / ".bvc").exists())
+        # --track と組み合わせれば使える
+        repo = self.init(["*.bin"], presets=["ign"])
+        self.assertEqual(repo.config.ignore, ["**/*.tmp"])
+
+    def test_f16_invalid_file_creates_nothing(self):
+        cases = [
+            ({"Bad": {"track": ["*"]}}, UsageError),
+            ({"x": {"track": ["*"], "trak": []}}, UsageError),
+            ({"x": {"track": "*"}}, UsageError),
+            ({"x": {"track": [""]}}, UsageError),
+            ({"x": {"description": 1}}, UsageError),
+            ({"x": {"include": ["nope"]}}, UsageError),
+            ({"a": {"include": ["b"]}, "b": {"include": ["a"]}}, UsageError),
+            ({"a": {"include": ["a"]}}, UsageError),
+            ([], UsageError),
+        ]
+        for presets, exc in cases:
+            with self.subTest(presets=presets):
+                self.write_presets(presets)
+                with self.assertRaises(exc):
+                    Repo.init(self.tmp, track=["*"], presets=["office"])
+                self.assertFalse((self.tmp / ".bvc").exists())
+        for data, exc in (
+            (b"{", BvcError),
+            (b'{"presets": {}}', BvcError),
+            (b'{"format": 99, "presets": {}}', UnsupportedFormat),
+        ):
+            with self.subTest(data=data):
+                (self.config_dir / "presets.json").write_bytes(data)
+                with self.assertRaises(exc) as cm:
+                    Repo.init(self.tmp, track=["*"], presets=["office"])
+                self.assertNotIsInstance(cm.exception, UsageError)
+                self.assertIn("presets.json", str(cm.exception))
+                self.assertFalse((self.tmp / ".bvc").exists())
+
+    def test_f16_broken_file_ignored_without_preset(self):
+        (self.config_dir / "presets.json").write_bytes(b"{")
+        self.init(["*"]).close()
+        self.reopen().close()
 
 
 class TestConfig(unittest.TestCase):

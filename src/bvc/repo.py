@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import secrets
 import shutil
 from collections.abc import Callable
@@ -58,6 +60,8 @@ from .model import (
     PinResult,
     PostCheckoutResult,
     PreCommitResult,
+    PresetInfo,
+    PresetList,
     ProgressEvent,
     SyncResult,
     VerifyReport,
@@ -71,6 +75,220 @@ logger = logging.getLogger(__name__)
 # BVC_DIR は fsutil から import して再公開する(後方互換のため repo.BVC_DIR も使える)。
 # {"name": "fixed", "size": "4M"}のような書き方も許容するため、Anyを使う
 DEFAULT_CHUNKER: Final[dict[str, Any]] = {"name": "fixed", "size": 4194304}
+
+
+class Preset(NamedTuple):
+    # init --preset で追加する追跡パターン・除外パターンの組(仕様書 3.1.1節)。
+    # include は先に取り込む他のプリセット(ユーザー定義だけが使う。3.1.2節)。
+    description: str
+    track: tuple[str, ...]
+    ignore: tuple[str, ...] = ()
+    include: tuple[str, ...] = ()
+
+
+def _exts(*names: str) -> tuple[str, ...]:
+    # 拡張子から、すべての階層に一致する追跡パターンを作る。
+    return tuple(f"**/*.{n}" for n in names)
+
+
+PRESETS: Final[dict[str, Preset]] = {
+    "office": Preset(
+        description="Microsoft Office・LibreOffice の文書",
+        track=_exts(
+            # Word, Excel, PowerPoint, Visio
+            *("doc", "docx", "docm", "dot", "dotx", "dotm"),
+            *("xls", "xlsx", "xlsm", "xlsb", "xlt", "xltx", "xltm"),
+            *("ppt", "pptx", "pptm", "pps", "ppsx", "ppsm", "pot", "potx", "potm"),
+            *("vsd", "vsdx", "vsdm"),
+            # LibreOffice(OpenDocument): Writer, Calc, Impress, Draw, Math
+            *("odt", "ott", "fodt", "ods", "ots", "fods"),
+            *("odp", "otp", "fodp", "odg", "otg", "fodg", "odf"),
+        ),
+        # 編集中に作られるロックファイル(Office: ~$名前.docx、LibreOffice: .~lock.名前.odt#)
+        ignore=("**/~$*", "**/.~lock.*#"),
+    ),
+    "image": Preset(
+        description="画像・ペイントソフトのファイル",
+        track=_exts(
+            *("psd", "psb", "ai", "xcf", "kra", "clip", "sai", "sai2", "mdp"),
+            *("afphoto", "afdesign"),
+            *("png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "webp"),
+            *("tga", "dds", "exr", "hdr"),
+        ),
+        # Krita の自動保存(.名前.kra-autosave.kra)
+        ignore=("**/*-autosave.kra",),
+    ),
+}
+
+
+PRESET_FILE: Final[str] = "presets.json"
+_PRESET_NAME: Final[re.Pattern[str]] = re.compile(r"[a-z0-9][a-z0-9_-]*")
+_PRESET_KEYS: Final[frozenset[str]] = frozenset(
+    {"description", "include", "track", "ignore"}
+)
+
+
+def preset_file() -> Path:
+    # ユーザー定義プリセットのファイルの場所(仕様書 3.1.2節)。
+    base = os.environ.get("BVC_CONFIG_DIR")
+    if base:
+        return Path(base) / PRESET_FILE
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        root = Path(xdg) if xdg and os.path.isabs(xdg) else Path.home() / ".config"
+    return root / "bvc" / PRESET_FILE
+
+
+def _dedup(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _read_user_presets(path: Path) -> dict[str, Preset] | None:
+    # presets.json を読んで検査する。無ければ None。
+    # 読めない・JSON でないなら BvcError(終了コード1)、値の誤りは config.json と同じく UsageError(終了コード2)。
+    def invalid(msg: str) -> UsageError:
+        return UsageError(f"{PRESET_FILE}: {msg}\n  {path}を修正してください")
+
+    try:
+        data = fsutil.read_bytes(path)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise BvcError(f"{PRESET_FILE}を読み込めません: {e}\n  {path}") from e
+    try:
+        # メモ帳などで BOM 付きで保存されても読めるようにする
+        obj = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise BvcError(
+            f"{PRESET_FILE}: JSONとして読めません({e})\n  {path}を修正してください"
+        ) from None
+    try:
+        obj = fsutil.check_format(obj, PRESET_FILE)
+    except CorruptData as e:
+        raise BvcError(f"{e}\n  {path}を修正してください") from None
+
+    presets = obj.get("presets", {})
+    if not isinstance(presets, dict):
+        raise invalid("presetsは辞書にしてください")
+    out: dict[str, Preset] = {}
+    for name, p in presets.items():
+        where = f"presets.{name}"
+        if not _PRESET_NAME.fullmatch(name):
+            raise invalid(
+                f"プリセット名に使えない文字があります: {name!r}"
+                "(英小文字・数字・_・-。先頭は英小文字か数字)"
+            )
+        if not isinstance(p, dict):
+            raise invalid(f"{where}は辞書にしてください")
+        unknown = sorted(set(p) - _PRESET_KEYS)
+        if unknown:
+            raise invalid(f"{where}に不明な項目があります: {', '.join(unknown)}")
+        description = p.get("description", "")
+        if type(description) is not str:
+            raise invalid(f"{where}.descriptionは文字列にしてください")
+        lists: dict[str, tuple[str, ...]] = {}
+        for key in ("include", "track", "ignore"):
+            v = p.get(key, [])
+            if not isinstance(v, list) or not all(type(s) is str and s for s in v):
+                raise invalid(f"{where}.{key}は文字列のリストにしてください")
+            lists[key] = tuple(v)
+        for pat in lists["track"] + lists["ignore"]:
+            compile_glob(pat)
+        out[name] = Preset(description=description, **lists)
+    return out
+
+
+def load_presets(path: Path | None = None) -> PresetList:
+    # 組み込みとユーザー定義のプリセットを読み、include を展開する(仕様書 3.1.2節)。
+    # ユーザー定義のどれか1つでも誤りがあれば、全体をエラーにする(使わないものも含めて)。
+    path = path if path is not None else preset_file()
+    user = _read_user_presets(path)
+    exists = user is not None
+    user = user or {}
+    # (種類, 名前) → 展開後の (track, ignore)
+    done: dict[tuple[str, str], tuple[list[str], list[str]]] = {}
+
+    def invalid(msg: str) -> UsageError:
+        return UsageError(f"{PRESET_FILE}: {msg}\n  {path}を修正してください")
+
+    def node_of(ref: str, owner: str) -> tuple[str, str]:
+        # 自分と同じ名前の include は、同名の組み込みを指す(組み込みに追加する書き方)
+        if ref == owner and ref in PRESETS:
+            return ("builtin", ref)
+        if ref in user:
+            return ("user", ref)
+        if ref in PRESETS:
+            return ("builtin", ref)
+        raise invalid(f"presets.{owner}.include: 不明なプリセットです: {ref}")
+
+    def expand(
+        node: tuple[str, str], stack: list[tuple[str, str]]
+    ) -> tuple[list[str], list[str]]:
+        if node in stack:
+            chain = " → ".join(n for _, n in [*stack, node])
+            raise invalid(f"includeが循環しています: {chain}")
+        if node in done:
+            return done[node]
+        kind, name = node
+        p = user[name] if kind == "user" else PRESETS[name]
+        track: list[str] = []
+        ignore: list[str] = []
+        for ref in p.include:
+            t, i = expand(node_of(ref, name), [*stack, node])
+            track += t
+            ignore += i
+        done[node] = (_dedup(track + list(p.track)), _dedup(ignore + list(p.ignore)))
+        return done[node]
+
+    def info(kind: str, name: str) -> PresetInfo:
+        p = user[name] if kind == "user" else PRESETS[name]
+        track, ignore = expand((kind, name), [])
+        return PresetInfo(
+            name=name,
+            description=p.description,
+            source=kind,
+            overrides=kind == "user" and name in PRESETS,
+            include=list(p.include),
+            track=track,
+            ignore=ignore,
+        )
+
+    # 組み込みの順に並べ(上書きされたものはユーザー定義で置き換える)、続けてユーザー定義だけのもの
+    presets = [info("user" if n in user else "builtin", n) for n in PRESETS]
+    presets += [info("user", n) for n in user if n not in PRESETS]
+    return PresetList(file=str(path), file_exists=exists, presets=presets)
+
+
+def resolve_presets(
+    names: list[str],
+    track: list[str],
+    ignore: list[str],
+    presets: list[PresetInfo] | None = None,
+) -> tuple[list[str], list[str]]:
+    # プリセットのパターンの後に、指定されたパターンを加える(重複は最初の1つだけ残す)。
+    # presets を省くと load_presets() で読む。
+    if presets is None:
+        presets = load_presets().presets
+    by_name = {p.name: p for p in presets}
+    unknown = [n for n in names if n not in by_name]
+    if unknown:
+        raise UsageError(
+            f"--preset: 不明なプリセットです: {', '.join(unknown)}"
+            f"(使えるもの: {', '.join(by_name)}。bvc preset listで確認できます)"
+        )
+    for n in dict.fromkeys(names):
+        if by_name[n].overrides:
+            logger.warning(
+                f"ユーザー定義のプリセット{n}を使います(組み込みの{n}を上書きしています)"
+            )
+    t = [p for n in names for p in by_name[n].track] + list(track)
+    i = [p for n in names for p in by_name[n].ignore] + list(ignore)
+    return _dedup(t), _dedup(i)
+
+
 _SUBDIRS: Final[tuple[str, ...]] = (
     "commits",
     "manifests",
@@ -314,9 +532,19 @@ class Repo:
         compression: str = "auto",
         git: bool = False,
         progress: ProgressFn | None = None,
+        presets: list[str] | None = None,
     ) -> Repo:
         # 新しいリポジトリを作り、その時点の追跡ファイルを版 0(kind=init)として記録する(M2-10)。
         # git なら git 連携を有効にし、bvc.lock を作る(M6-3)。フックの設置は呼び出し側(install_hooks)。
+        # presets のパターンは track・ignore の前に加える(仕様書 3.1.1節)。
+        # ユーザー定義のファイルは --preset を使うときだけ読む(壊れていても他の操作に影響しない)
+        if presets:
+            track, ignore = resolve_presets(presets, track, ignore or [])
+        track, ignore = list(track), list(ignore or [])
+        if not track:
+            raise UsageError(
+                "追跡パターンがありません(--trackを指定するか、trackを持つプリセットを--presetで指定してください)"
+            )
         workdir = fsutil.real_path(workdir)
         if not fsutil.is_dir(workdir):
             raise BvcError(f"作業フォルダが見つかりません: {workdir}")
@@ -327,8 +555,8 @@ class Repo:
             ck["seed"] = secrets.randbits(64)
         config_data = {
             "format": 1,
-            "track": list(track),
-            "ignore": list(ignore or []),
+            "track": track,
+            "ignore": ignore,
             "rules": [],
             "chunker": ck,
             "compression": compression,
