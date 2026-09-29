@@ -50,7 +50,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            asset_name: bvc-windows-amd64.exe
+            asset_name: bvc-windows-amd64
           - os: ubuntu-latest
             asset_name: bvc-linux-amd64
     runs-on: ${{ matrix.os }}
@@ -76,24 +76,29 @@ jobs:
       - name: Build executable
         run: python tools/build_nuitka.py
 
-      - name: Rename executable
+      - name: Check version consistency (tag / pyproject / 実行ファイル)
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/bvc.exe "dist/${{ matrix.asset_name }}"
+            python .github/scripts/check_version.py "${{ github.ref_name }}" dist/bvc.exe
           else
-            mv dist/bvc "dist/${{ matrix.asset_name }}"
+            python .github/scripts/check_version.py "${{ github.ref_name }}" dist/bvc
           fi
 
-      - name: Check version consistency (tag / pyproject / 実行ファイル)
-        shell: bash
-        run: python .github/scripts/check_version.py "${{ github.ref_name }}" "dist/${{ matrix.asset_name }}"
+      - name: Zip executable (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/bvc.exe -DestinationPath "dist/${{ matrix.asset_name }}.zip"
+
+      - name: Zip executable (Linux)
+        if: runner.os == 'Linux'
+        run: cd dist && zip "${{ matrix.asset_name }}.zip" bvc
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}.zip
 
   release:
     needs: [build-pyz, build-exe]
@@ -110,6 +115,6 @@ jobs:
           files: |
             dist/bvc.pyz
             dist/bvc.cmd
-            dist/bvc-windows-amd64.exe
-            dist/bvc-linux-amd64
+            dist/bvc-windows-amd64.zip
+            dist/bvc-linux-amd64.zip
           generate_release_notes: true

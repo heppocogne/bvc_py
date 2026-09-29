@@ -1,6 +1,6 @@
 [project]
 name = "bvc_py"
-version = "0.1.1"
+version = "0.1.2"
 description = "バイナリファイル向けバージョン管理システムのPython版(試作)"
 readme = "README.md"
 requires-python = ">=3.11"
