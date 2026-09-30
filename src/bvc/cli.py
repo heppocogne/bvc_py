@@ -1243,7 +1243,7 @@ def _short_time(iso: str) -> str:
 
 
 LOG_WIDTH: Final = 80  # log の1行の表示幅(端末の幅が分からないとき)
-LOG_MIN_TEXT: Final = 20# 折り返すメッセージ・note の最小の幅
+LOG_MIN_TEXT: Final = 20  # 折り返すメッセージ・note の最小の幅
 
 
 def _log_width() -> int:
@@ -1291,9 +1291,7 @@ def _entry_parts(e: LogEntry) -> tuple[str, str, str]:
     return head, c.message or f"({c.kind})", "  ".join(tail)
 
 
-def _entry_lines(
-    e: LogEntry, graph: str, cont_graph: str, width: int
-) -> list[str]:
+def _entry_lines(e: LogEntry, graph: str, cont_graph: str, width: int) -> list[str]:
     # 版の行。日時を右端(width)にそろえ、コメントの2行目以降はコメントの先頭にそろえる。
     head, message, tail = _entry_parts(e)
     gw = max(_width(graph), _width(cont_graph))

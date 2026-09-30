@@ -362,8 +362,16 @@ class TestLogTree(CliTestCase):
 
     def entry(self, message, notes=(), **kw):
         c = Commit(
-            id=8, parent=None, ancestors=(), branch=0, time="2026-09-25T20:10:00",
-            kind="commit", message=message, tree={}, renames=(), stats={},
+            id=8,
+            parent=None,
+            ancestors=(),
+            branch=0,
+            time="2026-09-25T20:10:00",
+            kind="commit",
+            message=message,
+            tree={},
+            renames=(),
+            stats={},
         )
         n = [Note(commit_id=8, time="2026-09-25T20:11:00", text=t) for t in notes]
         return cli.LogEntry(id=8, commit=c, effective_parent=None, notes=n, **kw)
