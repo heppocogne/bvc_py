@@ -243,6 +243,17 @@ class DiscardResult:
 
 
 @dataclass(slots=True)
+class SquashResult:
+    # squash の結果。仕様書 3.14節。
+
+    changed: bool  # 常に True(統合できなければ例外にする)
+    commit: Commit  # 統合してできた版(内容は子の版と同じ)
+    squashed: list[int]  # 削除印を付けた版番号([親, 子])
+    before: Head  # 操作前の位置とブランチ
+    after: Head  # 操作後の位置とブランチ(現在位置が子なら統合した版へ移る)
+
+
+@dataclass(slots=True)
 class GcReport:
     # gc の結果。dry_run では「削除する予定のもの」を入れる。仕様書 3.9節、設計書 4.8節。
 

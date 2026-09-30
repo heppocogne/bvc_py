@@ -1233,6 +1233,126 @@ class TestDiscard(HistoryOpsTestCase):
         self.assertEqual(repo._history.effective_parent(2), 0)
 
 
+class TestSquash(HistoryOpsTestCase):
+    # F-17: squash(子の版を親に統合する)
+
+    def test_f17_current_tip(self):
+        repo = self.build_linear(2)
+        repo.note("n1", rev="1")
+        repo.note("n2")
+        r = repo.squash()
+        c = r.commit
+        self.assertEqual(r.squashed, [1, 2])
+        self.assertEqual((c.id, c.parent, c.branch, c.kind), (3, 0, 0, "commit"))
+        self.assertEqual(c.message, "c1 / c2")
+        self.assertEqual(c.tree, repo._history.get(2).tree)
+        self.assertEqual((r.before, r.after), (Head(2, 0), Head(3, 0)))
+        self.assert_clean_at(repo, 3)  # 作業ファイルは変えない
+        self.assertEqual(self.files(), {"a.bin": b"v2"})
+        self.assertEqual([e.id for e in repo.log()], [3, 0])
+        self.assertEqual(self.notes(repo)[3], ["n1", "n2"])  # コメントを引き継ぐ
+        last = self.oplog(repo)[-1]
+        self.assertEqual(
+            (last["op"], last["created"], last["after"]),
+            ("squash", [3], {"at": 3, "branch": 0}),
+        )
+        repo = self.reopen(repo)
+        self.assertEqual([e.id for e in repo.log()], [3, 0])
+        repo.undo()
+        self.assertEqual(self.files(), {"a.bin": b"v0"})
+        repo.redo()
+        self.assert_clean_at(repo, 3)
+        self.assertEqual(self.files(), {"a.bin": b"v2"})
+
+    def test_f17_message(self):
+        repo = self.build_linear(1)
+        self.write("a.bin", b"edit")
+        auto = repo.undo().auto_commit
+        repo.goto(str(auto.id))
+        # 自動コミットのメッセージはつなげない
+        self.assertEqual(repo.squash().commit.message, "c1")
+        self.write("a.bin", b"v9")
+        repo.commit("c9")
+        self.assertEqual(repo.squash(message="まとめ").commit.message, "まとめ")
+
+    def test_f17_not_current(self):
+        repo = self.build_linear(3)
+        repo.goto("1")
+        r = repo.squash("3")
+        self.assertEqual((r.commit.id, r.commit.parent), (4, 1))
+        self.assertEqual(r.after, Head(1, 0))  # 現在位置は変えない
+        self.assert_clean_at(repo, 1)
+        repo.redo()  # ブランチの先端は統合した版
+        self.assert_clean_at(repo, 4)
+        self.assertEqual(self.files(), {"a.bin": b"v3"})
+
+    def test_f17_parent_is_root(self):
+        repo = self.build_linear(1)
+        r = repo.squash()
+        self.assertEqual((r.commit.parent, r.commit.ancestors), (None, ()))
+        self.assertEqual([e.id for e in repo.log()], [2])
+        with self.assertRaises(CannotMove):
+            repo.undo()
+
+    def test_f17_keeps_branch_name_and_reconnects_sibling(self):
+        # 0 ← 1 ← 2(ブランチ 0, main)、1 ← 3(ブランチ 1)。2 を 1 に統合する
+        repo = self.build_branchy()
+        repo.name_branch("main", "2")
+        r = repo.squash("2")
+        self.assertEqual((r.commit.parent, r.commit.branch), (0, 0))
+        self.assertEqual(repo.resolve("main"), r.commit.id)
+        self.assertEqual(repo._history.children(0), [3, r.commit.id])
+        self.assertEqual(self.head(repo), Head(3, 1))
+
+    def test_f17_uncommitted_changes_are_kept(self):
+        repo = self.build_linear(2)
+        self.write("a.bin", b"edit")
+        repo.squash()
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit")
+        self.assertEqual(repo.work_state().modified, ["a.bin"])
+
+    def test_f17_renames_are_composed(self):
+        self.write("a.bin", b"v0")
+        repo = self.init(["*.bin"])
+        (self.tmp / "a.bin").rename(self.tmp / "b.bin")
+        repo.commit("mv1")
+        (self.tmp / "b.bin").rename(self.tmp / "c.bin")
+        repo.commit("mv2")
+        self.assertEqual(repo.squash().commit.renames, (("a.bin", "c.bin", 1.0),))
+
+    def test_errors_write_nothing(self):
+        repo = self.build_linear(2)
+        cases = [
+            ("0", CannotMove),  # 根には親が無い
+            ("1", BvcError),  # 子がある
+        ]
+        for rev, exc in cases:
+            with self.subTest(rev=rev), self.assertRaises(exc):
+                repo.squash(rev)
+        repo.goto("1")
+        with self.assertRaises(BvcError):  # 現在位置が親
+            repo.squash("2")
+        repo.goto("2")
+        self.pin(repo, 1)
+        repo = self.reopen(repo)
+        with self.assertRaises(PinnedCommit) as cm:
+            repo.squash()
+        self.assertEqual(cm.exception.exit_code, 3)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 3)
+        self.assertFalse((repo.bvc_dir / "discarded.jsonl").exists())
+        self.assertEqual(repo.squash(force=True).squashed, [1, 2])
+
+    def test_unreadable_parent(self):
+        repo = self.build_linear(2)
+        repo.close()
+        helpers.break_json(self.tmp / ".bvc" / "commits" / "1.json")
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        with self.assertRaises(BrokenVersion):
+            repo.squash()
+        self.assertEqual(len(list((repo.bvc_dir / "commits").glob("*.json"))), 3)
+
+
 class TestGc(HistoryOpsTestCase):
     def snapshot(self):
         bvc = self.tmp / ".bvc"

@@ -16,6 +16,7 @@ from bvc.model import (
     MoveResult,
     Note,
     ProgressEvent,
+    SquashResult,
     VerifyReport,
     WorkState,
 )
@@ -443,6 +444,23 @@ class TestHistoryCommands(CliTestCase):
         code, out, _ = self.bvc("--json", "discard", "2")
         self.assertEqual((code, json.loads(out)["discarded"]), (0, 2))
 
+    def test_f17_squash(self):
+        code, out, _ = self.bvc("squash", "-m", "まとめ")
+        self.assertEqual(code, 0)
+        self.assertIn("版2を版1に統合し、版3(まとめ)を作成しました", out)
+        self.assertIn("現在位置を版3にしました", out)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"v2")
+        code, _, _ = self.bvc("squash", "0")  # 根には親が無い
+        self.assertEqual(code, 4)
+        self.write("a.bin", b"v4")
+        self.bvc("commit", "-m", "c4")
+        code, out, _ = self.bvc("--json", "squash")
+        data = json.loads(out)
+        self.assertEqual(
+            (set(data), data["squashed"], data["commit"]["message"]),
+            (_keys(SquashResult), [3, 4], "まとめ / c4"),
+        )
+
 
 class TestCorruptionCommands(CliTestCase):
     # M4-8, M4-9, M4-11(仕様書 2.9節・3.4節・3.10節)。観点: F-1, F-12, C-2, C-6。
@@ -686,6 +704,7 @@ class TestExitCodesAllCommands(CliTestCase):
         ("branch", "name", "x"),
         ("branch", "unname", "x"),
         ("discard",),
+        ("squash",),
         ("gc",),
         ("verify",),
         ("sync",),
@@ -706,6 +725,7 @@ class TestExitCodesAllCommands(CliTestCase):
         ("branch", "name"),
         ("branch", "bogus"),
         ("discard", "1", "2"),
+        ("squash", "1", "2"),
         ("gc", "--bogus"),
         ("verify", "--bogus"),
         ("sync", "--bogus"),

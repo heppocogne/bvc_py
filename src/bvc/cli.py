@@ -35,6 +35,7 @@ from .model import (
     PresetInfo,
     PresetList,
     ProgressEvent,
+    SquashResult,
     SyncResult,
     VerifyReport,
     WorkState,
@@ -515,6 +516,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
+    p = sub.add_parser("squash", help="版をその親に統合する(作業ファイルは変えない)")
+    p.add_argument(
+        "rev",
+        nargs="?",
+        default="@",
+        metavar="<版>",
+        help="統合する子の版(省略時は@)。子の無い版に限る",
+    )
+    p.add_argument(
+        "-m",
+        "--message",
+        dest="message",
+        default=None,
+        metavar="<メッセージ>",
+        help="統合した版のメッセージ(省略時は親と子のメッセージをつなげたもの)",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="gitのコミットが参照している版でも統合する",
+    )
+
     p = sub.add_parser("gc", help="削除済みの版と不要なデータを消す")
     p.add_argument(
         "--dry-run",
@@ -879,6 +902,17 @@ def _cmd_discard(args: argparse.Namespace, start: Path) -> int:
     return EXIT_OK
 
 
+def _cmd_squash(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        result = repo.squash(rev=args.rev, message=args.message, force=args.force)
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    for line in format_squash(result):
+        logger.info(line)
+    return EXIT_OK
+
+
 def _cmd_gc(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
         result = repo.gc(
@@ -1006,6 +1040,7 @@ _COMMANDS: Final[dict[str, Any]] = {
     "branch": _cmd_branch,
     "preset": _cmd_preset,
     "discard": _cmd_discard,
+    "squash": _cmd_squash,
     "gc": _cmd_gc,
     "verify": _cmd_verify,
     "sync": _cmd_sync,
@@ -1125,6 +1160,19 @@ def format_discard(r: DiscardResult) -> list[str]:
             )
         lines += [f"  restored: {p}" for p in r.restored]
         lines += [f"  deleted:  {p}" for p in r.deleted]
+    return lines
+
+
+def format_squash(r: SquashResult) -> list[str]:
+    parent, child = r.squashed
+    lines = [
+        f"版{child}を版{parent}に統合し、版{r.commit.id}({_commit_label(r.commit)})を作成しました",
+        f"  版{parent}, {child}に削除の印を付けました",
+    ]
+    if r.after.at != r.before.at:
+        lines.append(
+            f"  現在位置を版{r.after.at}にしました(作業ファイルは変えていません)"
+        )
     return lines
 
 

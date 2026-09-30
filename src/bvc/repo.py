@@ -63,6 +63,7 @@ from .model import (
     PresetInfo,
     PresetList,
     ProgressEvent,
+    SquashResult,
     SyncResult,
     VerifyReport,
     WorkState,
@@ -316,6 +317,33 @@ def _missing_error(state: WorkState) -> MissingFiles:
     lines.append("  削除として記録するには--allow-missingを指定してください")
     return MissingFiles(
         "\n".join(lines), missing=list(state.missing), hints=dict(state.hints)
+    )
+
+
+def _compose_renames(
+    first: tuple[tuple[str, str, float], ...],
+    second: tuple[tuple[str, str, float], ...],
+    base_tree: dict[str, str] | None,
+    tree: dict[str, str],
+) -> tuple[tuple[str, str, float], ...]:
+    # 2つの版の名前変更の記録(祖父母→親、親→子)を、祖父母→子の記録にまとめる(squash)。
+    # 連続した変更(a→b→c)は a→c とし、類似度は小さい方にする。最後に残らない名前・元に戻った名前は除く。
+    # base_tree(祖父母の tree。不明なら None)があれば、そこに無い名前からの変更も除く。
+    later = {old: (new, sim) for old, new, sim in second}
+    chained: set[str] = set()
+    result: list[tuple[str, str, float]] = []
+    for old, mid, sim in first:
+        if mid in later:
+            new, sim2 = later[mid]
+            chained.add(mid)
+            result.append((old, new, min(sim, sim2)))
+        else:
+            result.append((old, mid, sim))
+    result += [r for r in second if r[0] not in chained]
+    return tuple(
+        (old, new, sim)
+        for old, new, sim in result
+        if old != new and new in tree and (base_tree is None or old in base_tree)
     )
 
 
@@ -1370,6 +1398,116 @@ class Repo:
             auto_commit=res.auto_commit,
             restored=res.restored,
             deleted=res.deleted,
+        )
+
+    def squash(
+        self, rev: str = "@", message: str | None = None, force: bool = False
+    ) -> SquashResult:
+        # 版(子)をその親に統合する(仕様書 3.14節、設計書 4.13節)。統合した版は、子の内容で
+        # 親の親の子として新しく作り、親と子には削除印を付ける(版は不変なので書き換えない)。
+        # 作業ファイルは変えない(統合した版の内容は子と同じ)。未コミットの変更もそのまま残す。
+        # 書き込み順は 新しい版 → コメント → HEAD → 削除印 → oplog。途中で止まっても
+        # 「同じ内容の版が1つ増えただけ」で、HEAD が削除済みの版を指すことはない。
+        h = self._history
+        head = h.head()
+        child = h.resolve(rev, head)
+        parent = h.effective_parent(child)
+        if parent is None:
+            raise CannotMove(
+                f"版{child}は根(親の無い版)なので、統合する親がありません", at=child
+            )
+        kids = h.children(child)
+        if kids:
+            raise BvcError(
+                f"版{child}には子(版{', '.join(map(str, kids))})があるため統合できません。"
+                "子の無い版(ブランチの先端)を指定してください",
+                commit=child,
+                children=kids,
+            )
+        if head.at == parent:
+            raise BvcError(
+                f"現在位置の版{parent}は統合で削除されるため、統合できません。"
+                f"先に版{child}へ移動してください(bvc goto {child})",
+                commit=parent,
+            )
+        for cid in (parent, child):
+            if not h.is_readable(cid):
+                raise BrokenVersion(
+                    f"版{cid}は読み込めないため統合できません", commit=cid
+                )
+        if not self._is_healthy(child):
+            raise BrokenVersion(
+                f"版{child}は壊れているため統合できません", commit=child
+            )
+        pinned = sorted(h.pinned_ids() & {parent, child})
+        if pinned and not force:
+            raise PinnedCommit(
+                f"版{', '.join(map(str, pinned))}はgitのコミットから参照されています。"
+                "統合するには--forceを指定してください",
+                commit=pinned[0],
+            )
+        if message is not None and type(message) is not str:
+            raise UsageError("メッセージが不正です")
+
+        p, c = h.get(parent), h.get(child)
+        grand = h.effective_parent(parent)
+        if grand is None:
+            base_tree: dict[str, str] | None = {}
+        else:
+            base_tree = h.get(grand).tree if h.tree_known(grand) else None
+        if message is None:
+            message = " / ".join(
+                x.message for x in (p, c) if x.message and x.kind != "auto"
+            )
+        new = h.new_commit(
+            parent=grand,
+            tree=c.tree,
+            kind="commit",
+            message=message,
+            renames=_compose_renames(p.renames, c.renames, base_tree, c.tree),
+            stats={
+                "new_bytes": p.stats.get("new_bytes", 0) + c.stats.get("new_bytes", 0),
+                "total_bytes": (
+                    c.stats["total_bytes"]
+                    if "total_bytes" in c.stats
+                    else self._tree_size(c.tree)
+                ),
+            },
+            branch=c.branch,
+        )
+        for cid in (parent, child):
+            for n in h.get_notes(cid):
+                h.add_note(new.id, n.text, time=n.time)
+        after = head
+        if head.at == child:
+            after = Head(new.id, new.branch)
+            h.set_head(after)
+            self._update_lock(after)
+        h.discard(parent)
+        h.discard(child)
+        h.log_op(
+            {
+                "op": "squash",
+                "args": {
+                    "rev": rev,
+                    "id": child,
+                    "parent": parent,
+                    "force": force,
+                    "message": message,
+                },
+                "reason": "",
+                "before": _head_json(head),
+                "after": _head_json(after),
+                "created": [new.id],
+                "result": "ok",
+            }
+        )
+        return SquashResult(
+            changed=True,
+            commit=new,
+            squashed=[parent, child],
+            before=head,
+            after=after,
         )
 
     def gc(

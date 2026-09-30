@@ -461,11 +461,15 @@ class History:
         message: str,
         renames: tuple = (),
         stats: dict | None = None,
+        branch: int | None = None,
     ) -> Commit:
         # 新しい版を作成して保存する(M2-6)。書き込み順は counters → 版(設計書 4.7節)。
         # counters を先に進めるので、途中で中断しても同じ番号の版を書き直すことはない。
+        # branch を指定するとブランチ規則を使わずにそのブランチに置く(squash で名前を引き継ぐため)。
         if kind not in KINDS:
             raise ValueError(f"不明な種別: {kind!r}")
+        if branch is not None:
+            check_id(branch)
         counters_file = self._bvc_dir / "counters.json"
         counters = load_json(counters_file, "counters.json")
         try:
@@ -481,12 +485,16 @@ class History:
         # ブランチ規則(設計書 4.5節): 親に有効な子が無ければ親のブランチを延長する
         if parent is None:
             ancestors: tuple[int, ...] = ()
-            branch = next_branch
-            next_branch += 1
         else:
             if parent not in self._commits:
                 raise RevisionError(f"親の版{parent}は存在しません")
             ancestors = (parent,) + self._chain.get(parent, ())
+        if branch is not None:
+            next_branch = max(next_branch, branch + 1)
+        elif parent is None:
+            branch = next_branch
+            next_branch += 1
+        else:
             parent_commit = self._commits[parent]
             if parent_commit is not None and not self.children(parent):
                 branch = parent_commit.branch
@@ -532,11 +540,12 @@ class History:
 
     # --- note / discard / branch(M4-1〜M4-3) ---
 
-    def add_note(self, commit_id: int, text: str) -> Note:
+    def add_note(self, commit_id: int, text: str, time: str | None = None) -> Note:
         # コメントを追記する(M4-1、設計書 2.6節)。読み込み不可の版にも付けられる(仕様書 2.9節)。
+        # time は squash で元のコメントの日時を引き継ぐときに指定する。
         if commit_id not in self._commits:
             raise RevisionError(f"版{commit_id}は存在しません")
-        note = Note(commit_id=commit_id, time=now_iso(), text=text)
+        note = Note(commit_id=commit_id, time=time or now_iso(), text=text)
         path = self._notes_path(commit_id)
         makedirs(path.parent)
         append_jsonl(path, {"format": 1, "time": note.time, "text": note.text})
