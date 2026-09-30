@@ -785,7 +785,7 @@ def _cmd_log(args: argparse.Namespace, start: Path) -> int:
             },
         )
     else:
-        _print_text(format_log(entries, state))
+        _print_text(format_log(entries, state, _log_width()))
     return EXIT_OK
 
 
@@ -1242,21 +1242,78 @@ def _short_time(iso: str) -> str:
         return iso
 
 
-def _entry_text(e: LogEntry) -> str:
-    if e.commit is None:
-        return f"{e.id}  (読み込み不可)" + ("  (削除済み)" if e.discarded else "")
-    c = e.commit
-    # 状態(行頭の @ ○ ✗) → 版 → コメント → 日時 の順
-    parts = [str(e.id)]
-    if e.branch_label:
-        parts.append(f"[{e.branch_label}]")
-    parts.append(c.message or f"({c.kind})")
-    parts.append(_short_time(c.time))
+LOG_WIDTH: Final = 80  # log の1行の表示幅(端末の幅が分からないとき)
+LOG_MIN_TEXT: Final = 20# 折り返すメッセージ・note の最小の幅
+
+
+def _log_width() -> int:
+    # 端末の幅に合わせる。広すぎると日時が離れて読みにくいので上限を設ける。
+    cols = shutil.get_terminal_size((LOG_WIDTH + 1, 24)).columns - 1
+    return min(max(cols, 40), 100)
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    # 表示幅 width ごとに折り返す(改行はそのまま行の区切りにする)。
+    # 行の中に空白があれば、そこで折り返す(英単語を途中で切らない)。
+    width = max(width, 1)
+    out: list[str] = []
+    for para in text.splitlines() or [""]:
+        line = ""
+        for ch in para:
+            while line and _width(line + ch) > width:
+                cut = line.rfind(" ")
+                if ch != " " and cut > 0:
+                    out.append(line[:cut].rstrip())
+                    line = line[cut + 1 :]
+                else:
+                    out.append(line.rstrip())
+                    line = ""
+            if ch == " " and not line and out:
+                continue  # 折り返した行の先頭の空白は捨てる
+            line += ch
+        out.append(line.rstrip())
+    return out
+
+
+def _entry_parts(e: LogEntry) -> tuple[str, str, str]:
+    # (版とブランチ名, コメント, 注記と日時) に分ける。
+    # 状態(行頭の @ ○ ✗) → 版 → コメント → 注記 → 日時 の順に並べる。
+    head = f"{e.id}  " + (f"[{e.branch_label}]  " if e.branch_label else "")
+    tail = []
     if e.discarded:
-        parts.append("(削除済み)")
+        tail.append("(削除済み)")
     if e.broken:
-        parts.append("(壊れた版)")
-    return "  ".join(parts)
+        tail.append("(壊れた版)")
+    if e.commit is None:
+        return head, "(読み込み不可)", "  ".join(tail)
+    c = e.commit
+    tail.append(_short_time(c.time))
+    return head, c.message or f"({c.kind})", "  ".join(tail)
+
+
+def _entry_lines(
+    e: LogEntry, graph: str, cont_graph: str, width: int
+) -> list[str]:
+    # 版の行。日時を右端(width)にそろえ、コメントの2行目以降はコメントの先頭にそろえる。
+    head, message, tail = _entry_parts(e)
+    gw = max(_width(graph), _width(cont_graph))
+    prefix = graph.ljust(gw) + "  " + head
+    avail = width - _width(prefix) - (_width(tail) + 2 if tail else 0)
+    body = _wrap(message, max(avail, LOG_MIN_TEXT))
+    first = prefix + body[0]
+    if tail:
+        first += " " * max(width - _width(first) - _width(tail), 2) + tail
+    indent = cont_graph.ljust(gw) + "  " + " " * _width(head)
+    return [first] + [(indent + b).rstrip() for b in body[1:]]
+
+
+def _note_lines(graph: str, text: str, width: int) -> list[str]:
+    # note の行。2行目以降は note の本文の先頭にそろえる。
+    prefix = graph + "     note: "
+    w = _width(prefix)
+    body = _wrap(text, max(width - w, LOG_MIN_TEXT))
+    indent = graph + " " * (w - _width(graph))
+    return [prefix + body[0]] + [(indent + b).rstrip() for b in body[1:]]
 
 
 def _lane_cells(lanes: list[int | None]) -> list[str]:
@@ -1271,7 +1328,7 @@ def _join(cells: list[str], fill_from: int = -1, fill_to: int = -1) -> str:
     return out.rstrip()
 
 
-def _graph_lines(entries: list[LogEntry]) -> list[str]:
+def _graph_lines(entries: list[LogEntry], width: int = LOG_WIDTH) -> list[str]:
     # 版を新しい順に並べ、枝の列を割り当ててツリーを描く(M2-12、仕様書 3.3節)。
     # lanes[i] は列 i が次に待っている版の番号(None は空き)。
     lanes: list[int | None] = []
@@ -1291,14 +1348,15 @@ def _graph_lines(entries: list[LogEntry]) -> list[str]:
 
         cells = _lane_cells(lanes)
         cells[col] = "@" if e.is_current else ("✗" if e.broken else "○")
-        lines.append(f"{_join(cells)}  {_entry_text(e)}")
+        graph = _join(cells)
 
         parent = e.effective_parent
         lanes[col] = parent
+        cont_graph = _join(_lane_cells(lanes))
+        lines += _entry_lines(e, graph, cont_graph, width)
         for n in e.notes:
-            lines.append(
-                f"{_join(_lane_cells(lanes)).ljust(len(lanes) * 2 - 1)}     note: {n.text}"
-            )
+            note_graph = cont_graph.ljust(len(lanes) * 2 - 1)
+            lines += _note_lines(note_graph, n.text, width)
 
         # 同じ親を待つ列があれば、左側の列へ合流させる
         if parent is not None:
@@ -1317,7 +1375,9 @@ def _graph_lines(entries: list[LogEntry]) -> list[str]:
     return lines
 
 
-def format_log(entries: list[LogEntry], state: WorkState | None) -> str:
+def format_log(
+    entries: list[LogEntry], state: WorkState | None, width: int = LOG_WIDTH
+) -> str:
     lines = []
     if state is not None and state.dirty:
         changes = [f"{p} (modified)" for p in state.modified]
@@ -1325,5 +1385,5 @@ def format_log(entries: list[LogEntry], state: WorkState | None) -> str:
         changes += [f"{a} → {b} (renamed)" for a, b, _ in state.renamed]
         changes += [f"{p} (missing)" for p in state.missing]
         lines.append("未コミットの変更: " + ", ".join(changes))
-    lines += _graph_lines(entries)
+    lines += _graph_lines(entries, width)
     return "\n".join(lines)

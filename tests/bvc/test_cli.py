@@ -10,6 +10,7 @@ from pathlib import Path
 from bvc import cli
 from bvc.model import (
     BranchInfo,
+    Commit,
     CommitResult,
     DiscardResult,
     GcReport,
@@ -55,7 +56,7 @@ class TestCommands(CliTestCase):
         code, out, _ = self.bvc("log")
         self.assertEqual(code, 0)
         lines = out.splitlines()
-        self.assertRegex(lines[0], r"^@  1  変更  \d\d\d\d/\d\d/\d\d \d\d:\d\d$")
+        self.assertRegex(lines[0], r"^@  1  変更  +\d\d\d\d/\d\d/\d\d \d\d:\d\d$")
         self.assertRegex(lines[1], r"^○  0  \(init\)  .*$")
 
     def test_f12_no_change(self):
@@ -358,6 +359,68 @@ class TestLogTree(CliTestCase):
         lines = cli._graph_lines(entries)
         graph = [ln.split("  ")[0] for ln in lines]
         self.assertEqual(graph, ["○", "│ ○", "├─╯", "│ ○", "│ ○", "├─╯", "@"])
+
+    def entry(self, message, notes=(), **kw):
+        c = Commit(
+            id=8, parent=None, ancestors=(), branch=0, time="2026-09-25T20:10:00",
+            kind="commit", message=message, tree={}, renames=(), stats={},
+        )
+        n = [Note(commit_id=8, time="2026-09-25T20:11:00", text=t) for t in notes]
+        return cli.LogEntry(id=8, commit=c, effective_parent=None, notes=n, **kw)
+
+    def test_render_time_right_aligned(self):
+        # 日時は幅の右端にそろえる。注記は日時の前に置く
+        entries = [
+            self.entry("短い", is_current=True),
+            self.entry("少し長い", discarded=True),
+        ]
+        lines = cli._graph_lines(entries, width=50)
+        self.assertEqual(
+            lines,
+            [
+                "@  8  短い" + " " * 24 + "2026/09/25 20:10",
+                "○  8  少し長い" + " " * 8 + "(削除済み)  2026/09/25 20:10",
+            ],
+        )
+        self.assertEqual({cli._width(ln) for ln in lines}, {50})
+        # 幅が足りなくても、コメントは最小の幅(LOG_MIN_TEXT)を保つ
+        lines = cli._graph_lines([self.entry("やや長いメッセージ")], width=30)
+        self.assertEqual(lines, ["○  8  やや長いメッセージ  2026/09/25 20:10"])
+
+    def test_render_wrap_and_multiline(self):
+        # 折り返し・複数行のコメントは、2行目以降をコメントの先頭にそろえる
+        e = self.entry(
+            "one two three four five six seven\n二行目",
+            notes=["あいうえおかきくけこさしすせそたちつてと"],
+            branch_label="b",
+        )
+        e2 = self.entry("x", is_current=True)
+        e.effective_parent = e2.id = 1
+        lines = cli._graph_lines([e, e2], width=60)
+        self.assertEqual(
+            lines,
+            [
+                "○  8  [b]  one two three four five six      2026/09/25 20:10",
+                "│          seven",
+                "│          二行目",
+                "│     note: あいうえおかきくけこさしすせそたちつてと",
+                "@  1  x" + " " * 37 + "2026/09/25 20:10",
+            ],
+        )
+        lines = cli._graph_lines([e], width=40)
+        self.assertEqual(
+            lines[-2:],
+            [
+                "│     note: あいうえおかきくけこさしすせ",
+                "│           そたちつてと",
+            ],
+        )
+
+    def test_wrap(self):
+        self.assertEqual(cli._wrap("ab cd ef", 5), ["ab cd", "ef"])
+        self.assertEqual(cli._wrap("abcdefg", 3), ["abc", "def", "g"])
+        self.assertEqual(cli._wrap("ああa", 3), ["あ", "あa"])
+        self.assertEqual(cli._wrap("a\n\nb", 5), ["a", "", "b"])
 
 
 class TestHistoryCommands(CliTestCase):
