@@ -1,6 +1,6 @@
 # repo の単体テスト(M2-2, M2-10, M3-6, M3-7, M4-1〜M4-11)。
 # 観点: F-1, F-2, F-3, F-4, F-6, F-7, F-8, F-9, F-12, F-14, F-15, F-16, P-5, P-7, P-8, P-9,
-#       R-1, R-2, R-4, R-6, R-7, R-8, R-9, R-10, R-11, C-1〜C-8, C-10, C-11。
+#       F-18, R-1, R-2, R-4, R-6, R-7, R-8, R-9, R-10, R-11, C-1〜C-8, C-10, C-11。
 
 import json
 import os
@@ -732,6 +732,168 @@ class TestUndoRedoGoto(MoveTestCase):
         with self.assertRaises(BrokenVersion):
             repo.goto("1")
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit")
+
+
+class TestRestore(MoveTestCase):
+    # F-18: restore(指定のファイルだけを版の内容に戻す)。
+    def build(self):
+        # 版0: a=a0, b=b0 / 版1: a=a1, b=b1, sub/c=c1
+        self.write("a.bin", b"a0")
+        self.write("b.bin", b"b0")
+        repo = self.init(["**/*.bin"])
+        self.write("a.bin", b"a1")
+        self.write("b.bin", b"b1")
+        self.write("sub/c.bin", b"c1")
+        repo.commit("one")
+        return repo
+
+    def test_f18_restore_only_selected_file(self):
+        repo = self.build()
+        r = repo.restore(["a.bin"], rev="0")
+        self.assertTrue(r.changed)
+        self.assertEqual((r.source, r.paths), (0, ["a.bin"]))
+        self.assertEqual((r.before, r.after), (Head(1, 0), Head(1, 0)))
+        self.assertIsNone(r.auto_commit)
+        self.assertEqual((r.restored, r.deleted), (["a.bin"], []))
+        self.assertEqual(
+            self.files(), {"a.bin": b"a0", "b.bin": b"b1", "sub/c.bin": b"c1"}
+        )
+        self.assertEqual(self.head(repo), Head(1, 0))
+        self.assertEqual(repo.work_state().modified, ["a.bin"])
+        self.assertFalse((repo.bvc_dir / "journal.json").exists())
+        op = self.oplog(repo)[-1]
+        self.assertEqual(
+            (op["op"], op["args"]["source"], op["args"]["paths"], op["created"]),
+            ("restore", 0, ["a.bin"], []),
+        )
+        # 現在位置の内容に戻せる(自動コミットは作らない。a0 は版0に保存済み)
+        r = repo.restore(["a.bin"])
+        self.assertEqual((r.changed, r.auto_commit, r.source), (True, None, 1))
+        self.assert_clean_at(repo, 1)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 2)
+
+    def test_f18_auto_commit_before_overwriting_unsaved_change(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        self.write("b.bin", b"b-edit")
+        r = repo.restore(["a.bin"])  # @ は自動コミットの前の位置(版1)
+        self.assertEqual(r.auto_commit.id, 2)
+        self.assertEqual(r.auto_commit.message, "auto: before restore a.bin")
+        self.assertEqual(r.after, Head(2, 0))
+        self.assertEqual(r.source, 1)
+        self.assertEqual(
+            self.files(), {"a.bin": b"a1", "b.bin": b"b-edit", "sub/c.bin": b"c1"}
+        )
+        self.assertEqual(self.head(repo), Head(2, 0))
+        self.assertEqual(self.oplog(repo)[-1]["created"], [2])
+        # 編集内容は自動コミットから取り戻せる
+        repo.restore(["a.bin"], rev="2")
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit")
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 3)
+
+    def test_f18_unrelated_changes_are_left_uncommitted(self):
+        repo = self.build()
+        self.write("b.bin", b"b-edit")
+        r = repo.restore(["a.bin"], rev="0")
+        self.assertIsNone(r.auto_commit)
+        self.assertEqual((self.tmp / "b.bin").read_bytes(), b"b-edit")
+        self.assertEqual(repo.work_state().modified, ["a.bin", "b.bin"])
+
+    def test_f18_unchanged_returns_changed_false(self):
+        repo = self.build()
+        n = len(self.oplog(repo))
+        r = repo.restore(["a.bin"])
+        self.assertFalse(r.changed)
+        self.assertEqual((r.restored, r.deleted), ([], []))
+        self.assertEqual(len(self.oplog(repo)), n)
+
+    def test_f18_file_absent_in_source_is_deleted(self):
+        repo = self.build()
+        r = repo.restore(["sub/c.bin", "b.bin"], rev="0")
+        self.assertEqual((r.restored, r.deleted), (["b.bin"], ["sub/c.bin"]))
+        self.assertEqual(self.files(), {"a.bin": b"a1", "b.bin": b"b0"})
+        self.assertTrue((self.tmp / "sub").is_dir())
+        repo.restore(["sub/c.bin"])
+        self.assertEqual((self.tmp / "sub" / "c.bin").read_bytes(), b"c1")
+
+    def test_f18_backslash_and_dot_paths(self):
+        repo = self.build()
+        r = repo.restore([".\\sub\\c.bin", "./a.bin"], rev="0")
+        self.assertEqual(r.paths, ["a.bin", "sub/c.bin"])
+
+    def test_f18_missing_selected_file_is_restored(self):
+        repo = self.build()
+        (self.tmp / "a.bin").unlink()
+        r = repo.restore(["a.bin"])
+        self.assertIsNone(r.auto_commit)
+        self.assert_clean_at(repo, 1)
+
+    def test_f7_missing_other_file_aborts_only_with_auto_commit(self):
+        repo = self.build()
+        (self.tmp / "b.bin").unlink()
+        repo.restore(["a.bin"], rev="0")  # 自動コミット不要なら b.bin の欠落は関係ない
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"a0")
+        self.write("a.bin", b"edit")
+        before = self.files()
+        with self.assertRaises(MissingFiles) as cm:
+            repo.restore(["a.bin"])
+        self.assertEqual(
+            (cm.exception.exit_code, cm.exception.details["missing"]), (3, ["b.bin"])
+        )
+        self.assertEqual(self.files(), before)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 2)
+        r = repo.restore(["a.bin"], allow_missing=True)
+        self.assertNotIn("b.bin", r.auto_commit.tree)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"a1")
+
+    def test_f18_usage_errors_change_nothing(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        before = self.files()
+        for paths, rev in (
+            (["nosuch.bin"], "@"),
+            (["../a.bin"], "@"),
+            ([], "@"),
+        ):
+            with self.subTest(paths=paths), self.assertRaises(UsageError) as cm:
+                repo.restore(paths, rev=rev)
+            self.assertEqual(cm.exception.exit_code, 2)
+        with self.assertRaises(RevisionError):
+            repo.restore(["a.bin"], rev="99")
+        self.assertEqual(self.files(), before)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 2)
+
+    def test_r10_untracked_collision_aborts_before_auto_commit(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        repo._worktree.config.ignore.append("sub/c.bin")
+        repo._worktree._ignore.append(fsutil.compile_glob("sub/c.bin"))
+        before = self.files()
+        with self.assertRaises(SafetyAbort):
+            repo.restore(["a.bin", "sub/c.bin"], rev="1")
+        self.assertEqual(self.files(), before)
+        self.assertEqual(len(commit_files(repo.bvc_dir)), 2)
+
+    def test_r2_fault_rolls_back_selected_files(self):
+        repo = self.build()
+        self.write("a.bin", b"edit")
+        before = self.files()
+        hook = helpers.FaultAt("replace:swap:1")
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(FileBusy),
+        ):
+            repo.restore(["a.bin", "b.bin"], rev="0")
+        self.assertEqual(self.files(), before)
+        self.assert_clean_at(repo, 2)  # 自動コミットは残る(編集内容は版2にある)
+        self.assertEqual(self.oplog(repo)[-1]["result"], "error")
+
+    def test_broken_source_is_rejected(self):
+        repo = self.build()
+        (repo.bvc_dir / "commits" / "0.json").write_text("{", "utf-8")
+        repo = self.reopen(repo)
+        with self.assertRaises(BrokenVersion):
+            repo.restore(["a.bin"], rev="0")
 
 
 class TestMoveSafety(MoveTestCase):

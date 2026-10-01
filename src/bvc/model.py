@@ -254,6 +254,20 @@ class SquashResult:
 
 
 @dataclass(slots=True)
+class FileRestoreResult:
+    # restore(指定のファイルだけを版の内容に戻す)の結果。仕様書 3.15節。
+
+    changed: bool  # 自動コミットを作ったか、作業ファイルを書き換えたか
+    source: int  # 復元元の版
+    paths: list[str]  # 指定に一致したパス(記録上の綴り)
+    before: Head  # 操作前の位置とブランチ
+    after: Head  # 操作後の位置とブランチ(自動コミットがあればその版、無ければ before と同じ)
+    auto_commit: Commit | None = None  # 自動コミット(あれば)
+    restored: list[str] = field(default_factory=list)  # 復元元の内容に置き換えたパス
+    deleted: list[str] = field(default_factory=list)  # 復元元に無いため削除したパス
+
+
+@dataclass(slots=True)
 class GcReport:
     # gc の結果。dry_run では「削除する予定のもの」を入れる。仕様書 3.9節、設計書 4.8節。
 

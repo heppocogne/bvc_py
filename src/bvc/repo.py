@@ -9,7 +9,7 @@ import re
 import secrets
 import shutil
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, Final, NamedTuple, Self
 
@@ -33,6 +33,7 @@ from .errors import (
 )
 from .fsutil import (
     BVC_DIR,
+    IS_WINDOWS,
     FileLock,
     atomic_write_json,
     check_relpath,
@@ -48,6 +49,7 @@ from .model import (
     CommitResult,
     Config,
     DiscardResult,
+    FileRestoreResult,
     GcReport,
     GitConfig,
     Head,
@@ -318,6 +320,39 @@ def _missing_error(state: WorkState) -> MissingFiles:
     return MissingFiles(
         "\n".join(lines), missing=list(state.missing), hints=dict(state.hints)
     )
+
+
+def _normalize_arg_path(p: str, what: str) -> str:
+    # 引数で指定された作業フォルダからの相対パスを、記録と同じ形式('/' 区切り、NFC)にする。
+    # '\\' も区切りとみなす。使えないパスは引数の誤り(終了コード2)。
+    q = p.replace("\\", "/")
+    while q.startswith("./"):
+        q = q[2:]
+    try:
+        return check_relpath(q)
+    except UnsafePath as e:
+        raise UsageError(f"{what}: 使えないパスです: {p}({e})", path=p) from None
+
+
+def _match_paths(paths: list[str], candidates: set[str], source: int) -> list[str]:
+    # restore で指定されたパスを、記録・作業フォルダ上のパスに対応付ける(仕様書 3.15節)。
+    # Windows では大文字小文字だけが異なるものはすべて同じファイルとして選ぶ(大文字小文字だけの名前変更を含む)。
+    # それ以外では完全一致を優先し、無ければ大文字小文字を無視して一意に決まるものを選ぶ。
+    selected: set[str] = set()
+    for p in paths:
+        q = _normalize_arg_path(p, "restore")
+        key = q.casefold()
+        folded = {c for c in candidates if c.casefold() == key}
+        if IS_WINDOWS:
+            hits = folded
+        else:
+            hits = {q} & candidates or (folded if len(folded) == 1 else set())
+        if not hits:
+            raise UsageError(
+                f"版{source}にも作業フォルダにも無い追跡ファイルです: {p}", path=p
+            )
+        selected |= hits
+    return sorted(selected)
 
 
 def _compose_renames(
@@ -834,21 +869,10 @@ class Repo:
     ) -> list[tuple[str, str]]:
         # 名前変更の手動指定を、記録と同じ形式('/' 区切り、NFC)の相対パスにする。
         # 作業フォルダからの相対パスとして扱い、'\\' も区切りとみなす。
-        out = []
-        for pair in renames or ():
-            norm = []
-            for p in pair:
-                q = p.replace("\\", "/")
-                while q.startswith("./"):
-                    q = q[2:]
-                try:
-                    norm.append(check_relpath(q))
-                except UnsafePath as e:
-                    raise UsageError(
-                        f"--rename: 使えないパスです: {p}({e})", path=p
-                    ) from None
-            out.append((norm[0], norm[1]))
-        return out
+        return [
+            (_normalize_arg_path(old, "--rename"), _normalize_arg_path(new, "--rename"))
+            for old, new in renames or ()
+        ]
 
     def commit(
         self,
@@ -1197,6 +1221,119 @@ class Repo:
         if import_tree is not None:
             return SyncResult(**_fields_of(result), imported=imported)
         return result
+
+    def restore(
+        self,
+        paths: list[str],
+        rev: str = "@",
+        allow_missing: bool = False,
+        progress: ProgressFn | None = None,
+    ) -> FileRestoreResult:
+        # 指定のファイルだけを版 rev の内容に戻す(仕様書 3.15節)。現在位置は変えず、指定外の作業ファイルには触れない。
+        # 上書き・削除するファイルに未コミットの変更があれば、先に自動コミットする(rev は自動コミットの前の位置で解決する)。
+        # 復元元に無いファイルは削除する。復元は移動系と同じトランザクション(全部成功か全部元通り)で行う。
+        if not paths:
+            raise UsageError("復元するファイルを指定してください")
+        h, wt = self._history, self._worktree
+        head = h.head()
+        source = h.resolve(rev, head)
+        if not h.tree_known(source):
+            raise BrokenVersion(
+                f"版{source}は壊れているため、ファイルを復元できません", commit=source
+            )
+        source_tree = h.get(source).tree
+        known_tree = self._base_tree(head)
+        base_tree = {} if known_tree is None else known_tree
+        selected = _match_paths(
+            paths, set(source_tree) | set(base_tree) | set(wt.scan()), source
+        )
+
+        # 事前検査(パス・保存データ・追跡対象外との衝突)。ここまでは何も変えない
+        wt.check_target({p: source_tree[p] for p in selected if p in source_tree})
+        # 上書き・削除し得るパスは、stat キャッシュを使わずにハッシュする(仕様書 2.8節)
+        state = wt.state(
+            base_tree=base_tree,
+            store_chunks=True,
+            no_cache=set(selected),
+            find_hints=not allow_missing,
+            progress=progress,
+        )
+        target_tree = dict(state.tree)
+        for p in selected:
+            if p in source_tree:
+                target_tree[p] = source_tree[p]
+            else:
+                target_tree.pop(p, None)
+
+        # 上書き・削除するファイルの内容が、どの版(削除済みを除く)にも無いときだけ自動コミットする。
+        # 指定外の変更は触らないので、未コミットのまま残す
+        saved = {
+            sha for c in h.living() if h.tree_known(c.id) for sha in c.tree.values()
+        }
+        unsaved = [
+            p
+            for p in selected
+            if p in state.tree
+            and state.tree[p] not in saved
+            and state.tree[p] != target_tree.get(p)
+        ]
+        auto = None
+        current = head
+        if unsaved or known_tree is None:
+            # 復元するファイルが消えているのは、ここで戻すので欠落として扱わない
+            missing = [p for p in state.missing if p not in selected]
+            if missing and not allow_missing:
+                raise _missing_error(replace(state, missing=missing))
+            message = f"auto: before restore {' '.join(selected)}"
+            auto = h.new_commit(
+                parent=head.at,
+                tree=state.tree,
+                kind="auto",
+                message=message,
+                renames=tuple(state.renamed),
+                stats={"new_bytes": state.new_bytes, "total_bytes": state.total_bytes},
+            )
+            current = Head(auto.id, auto.branch)
+            h.set_head(current)
+            self._update_lock(current)
+            wt.update_index(state.tree, state.fs_time_ns)
+
+        created = [auto.id] if auto is not None else []
+        entry = {
+            "op": "restore",
+            "args": {
+                "rev": rev,
+                "source": source,
+                "paths": selected,
+                "allow_missing": allow_missing,
+            },
+            "reason": "",
+            "before": _head_json(head),
+            "after": _head_json(current),
+            "created": created,
+        }
+        try:
+            res = wt.restore(target_tree, state, current, h.set_head, progress)
+        except BaseException as e:
+            if created:
+                try:
+                    h.log_op({**entry, "result": "error", "error": str(e)})
+                except Exception:
+                    logger.warning("操作ログに記録できませんでした", exc_info=True)
+            raise
+        changed = auto is not None or bool(res.written or res.deleted)
+        if changed:
+            h.log_op({**entry, "result": "ok"})
+        return FileRestoreResult(
+            changed=changed,
+            source=source,
+            paths=selected,
+            before=head,
+            after=current,
+            auto_commit=auto,
+            restored=res.written,
+            deleted=res.deleted,
+        )
 
     def resolve(self, rev: str) -> int:
         # リビジョン式を版番号にする。

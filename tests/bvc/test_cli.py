@@ -320,6 +320,28 @@ class TestMoveCommands(CliTestCase):
         self.assertEqual(code, 0)
         self.assertEqual((self.tmp / "a.bin").read_bytes(), b"0")
 
+    def test_f18_restore(self):
+        self.write("a.bin", b"edit")
+        code, out, err = self.bvc("restore", "a.bin", "--from", "0")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("版0からファイルを復元しました(現在位置: 版2)", out)
+        self.assertIn("auto: before restore a.bin", out)
+        self.assertIn("restored: a.bin", out)
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"0")
+        code, out, _ = self.bvc("restore", "a.bin", "--from", "0")
+        self.assertEqual(code, 0)
+        self.assertIn("変更なし", out)
+        code, out, _ = self.bvc("--json", "restore", "a.bin")
+        data = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            (data["changed"], data["source"], data["restored"], data["auto_commit"]),
+            (True, 2, ["a.bin"], None),
+        )
+        self.assertEqual((self.tmp / "a.bin").read_bytes(), b"edit")
+        code, out, _ = self.bvc("--json", "restore", "nosuch.bin")
+        self.assertEqual((code, json.loads(out)["type"]), (2, "UsageError"))
+
 
 class TestLogTree(CliTestCase):
     def test_m2_done_branch_tree(self):
@@ -770,6 +792,7 @@ class TestExitCodesAllCommands(CliTestCase):
         ("undo",),
         ("redo",),
         ("goto", "0"),
+        ("restore", "a.bin"),
         ("note", "-m", "x"),
         ("branch",),
         ("branch", "name", "x"),
@@ -792,6 +815,8 @@ class TestExitCodesAllCommands(CliTestCase):
         ("undo", "--bogus"),
         ("redo", "--bogus"),
         ("goto",),
+        ("restore",),
+        ("restore", "a.bin", "--from"),
         ("note",),
         ("branch", "name"),
         ("branch", "bogus"),

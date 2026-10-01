@@ -28,6 +28,7 @@ from .model import (
     BranchInfo,
     Commit,
     DiscardResult,
+    FileRestoreResult,
     GcReport,
     HooksResult,
     LogEntry,
@@ -478,6 +479,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
 
+    p = sub.add_parser(
+        "restore", help="指定のファイルだけを版の内容に戻す(現在位置は変えない)"
+    )
+    p.add_argument(
+        "paths", nargs="+", metavar="<パス>", help="作業フォルダからの相対パス"
+    )
+    p.add_argument(
+        "--from",
+        dest="rev",
+        default="@",
+        metavar="<版>",
+        help="復元元の版(省略時は@)",
+    )
+    p.add_argument("--allow-missing", action="store_true", help=allow_missing_help)
+
     p = sub.add_parser("note", help="版にコメントを追記する")
     p.add_argument(
         "-m",
@@ -817,6 +833,22 @@ def _cmd_move(args: argparse.Namespace, start: Path) -> int:
     return EXIT_OK
 
 
+def _cmd_restore(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        result = repo.restore(
+            args.paths,
+            rev=args.rev,
+            allow_missing=args.allow_missing,
+            progress=args.progress,
+        )
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    for line in format_restore(result):
+        logger.info(line)
+    return EXIT_OK
+
+
 def _cmd_note(args: argparse.Namespace, start: Path) -> int:
     with Repo.open(start) as repo:
         note = repo.note(args.text, rev=args.rev)
@@ -1036,6 +1068,7 @@ _COMMANDS: Final[dict[str, Any]] = {
     "undo": _cmd_move,
     "redo": _cmd_move,
     "goto": _cmd_move,
+    "restore": _cmd_restore,
     "note": _cmd_note,
     "branch": _cmd_branch,
     "preset": _cmd_preset,
@@ -1061,6 +1094,19 @@ def format_move(r: MoveResult) -> list[str]:
     lines = [f"版{r.after.at}に移動しました"]
     if r.skipped:
         lines.append(f"  壊れた版 {', '.join(map(str, r.skipped))}を飛ばしました")
+    if r.auto_commit is not None:
+        lines.append(
+            f"  未コミットの変更を版{r.auto_commit.id}に自動コミットしました({r.auto_commit.message})"
+        )
+    lines += [f"  restored: {p}" for p in r.restored]
+    lines += [f"  deleted:  {p}" for p in r.deleted]
+    return lines
+
+
+def format_restore(r: FileRestoreResult) -> list[str]:
+    if not r.changed:
+        return [f"変更なし(指定のファイルは版{r.source}と同じ内容です)"]
+    lines = [f"版{r.source}からファイルを復元しました(現在位置: 版{r.after.at})"]
     if r.auto_commit is not None:
         lines.append(
             f"  未コミットの変更を版{r.auto_commit.id}に自動コミットしました({r.auto_commit.message})"
