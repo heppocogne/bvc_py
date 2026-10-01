@@ -1,4 +1,4 @@
-# history の単体テスト(M2-3〜M2-6, M4-1〜M4-3, M6-5)。観点: F-2, F-5, F-8, F-9(pin), F-14, C-3, C-8, R-1(版の書き込み部分), V-2。
+# history の単体テスト(M2-3〜M2-6, M4-1〜M4-3, M6-5)。観点: F-2, F-5, F-8, F-9(pin), F-14, F-19, C-3, C-8, R-1(版の書き込み部分), V-2。
 
 import json
 import unittest
@@ -313,6 +313,27 @@ class TestNotesDiscardBranches(HistoryTestCase):
         )
         with self.assertLogs("bvc.history", "WARNING"):
             self.assertEqual([n.text for n in self.h.get_notes(0)], ["ok"])
+
+    def test_f19_set_message(self):
+        self.linear(2)
+        c = self.h.set_message(1, "新")
+        self.assertEqual(c.message, "新")
+        self.assertEqual(self.h.get(1).message, "新")
+        self.assertEqual(load(self.bvc).get(1).message, "新")
+        self.assertEqual(self.h.get(1).ancestors, (0,))
+        with self.assertRaises(RevisionError):
+            self.h.set_message(9, "x")
+
+    def test_f19_set_message_unknown_format(self):
+        # 読み込み後に知らない format へ書き換わっていたら、何も書かずに中止する(V-2)
+        self.linear(1)
+        path = self.bvc / "commits" / "0.json"
+        data = json.loads(path.read_bytes())
+        fsutil.atomic_write_json(path, {**data, "format": 99}, self.bvc / "tmp")
+        raw = path.read_bytes()
+        with self.assertRaises(UnsupportedFormat):
+            self.h.set_message(0, "x")
+        self.assertEqual(path.read_bytes(), raw)
 
     def test_f8_discard_persists_and_reconnects(self):
         self.linear(3)

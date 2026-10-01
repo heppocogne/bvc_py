@@ -1204,6 +1204,102 @@ class TestNote(HistoryOpsTestCase):
             self.assertEqual(self.notes(repo)[1], ["a", "b"])
 
 
+class TestDescribe(HistoryOpsTestCase):
+    # 仕様書 3.16節。観点: F-19。
+
+    def commit_file(self, repo, cid):
+        return repo.bvc_dir / "commits" / f"{cid}.json"
+
+    def oplog(self, repo):
+        records, _warns = fsutil.read_jsonl(repo.bvc_dir / "oplog.jsonl", "oplog")
+        return records
+
+    def test_f19_changes_only_message(self):
+        repo = self.build_linear(2)
+        before = json.loads(self.commit_file(repo, 1).read_bytes())
+        head = self.head(repo)
+        r = repo.describe("新しい説明", rev="1")
+        self.assertTrue(r.changed)
+        self.assertEqual((r.commit.id, r.commit.message), (1, "新しい説明"))
+        self.assertEqual(r.previous, before["message"])
+        after = json.loads(self.commit_file(repo, 1).read_bytes())
+        self.assertEqual(after, {**before, "message": "新しい説明"})
+        self.assertEqual(self.head(repo), head)
+        self.assertEqual(self.reopen(repo)._history.get(1).message, "新しい説明")
+        last = self.oplog(repo)[-1]
+        self.assertEqual(last["op"], "describe")
+        self.assertEqual(
+            last["args"],
+            {
+                "rev": "1",
+                "id": 1,
+                "previous": before["message"],
+                "message": "新しい説明",
+            },
+        )
+
+    def test_f19_same_message_writes_nothing(self):
+        repo = self.build_linear(1)
+        data = self.commit_file(repo, 1).read_bytes()
+        n = len(self.oplog(repo))
+        r = repo.describe(repo._history.get(1).message)
+        self.assertFalse(r.changed)
+        self.assertEqual(self.commit_file(repo, 1).read_bytes(), data)
+        self.assertEqual(len(self.oplog(repo)), n)
+
+    def test_f19_auto_and_broken_versions(self):
+        repo = self.build_linear(1)
+        self.write("a.bin", b"edit")
+        auto = repo.undo().auto_commit
+        self.assertEqual(repo.describe("編集", rev=str(auto.id)).commit.kind, "auto")
+        repo.close()
+        # 不正なパスを含む版(壊れた版)。不正な項目と知らない項目は書き換え後も残す
+        path = self.commit_file(repo, 1)
+        data = json.loads(path.read_bytes())
+        data["tree"]["../x"] = "a" * 64
+        data["extra"] = [1]
+        fsutil.atomic_write_json(path, data, repo.bvc_dir / "tmp")
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        repo.describe("壊れた版", rev="1")
+        self.assertEqual(json.loads(path.read_bytes()), {**data, "message": "壊れた版"})
+
+    def test_errors_write_nothing(self):
+        repo = self.build_linear(2)
+        repo.discard("0")
+        repo.close()
+        helpers.break_json(self.commit_file(repo, 1))
+        with self.assertLogs("bvc.history", "WARNING"):
+            repo = self.reopen()
+        files = {p.name: p.read_bytes() for p in (repo.bvc_dir / "commits").iterdir()}
+        n = len(self.oplog(repo))
+        for message, rev, exc in (
+            ("", "@", UsageError),
+            ("x", "9", RevisionError),
+            ("x", "0", RevisionError),  # 削除済み
+            ("x", "1", BrokenVersion),  # 読み込み不可
+        ):
+            with self.subTest(message=message, rev=rev), self.assertRaises(exc):
+                repo.describe(message, rev=rev)
+        after = {p.name: p.read_bytes() for p in (repo.bvc_dir / "commits").iterdir()}
+        self.assertEqual(after, files)
+        self.assertEqual(len(self.oplog(repo)), n)
+
+    def test_fault_keeps_original(self):
+        repo = self.build_linear(1)
+        data = self.commit_file(repo, 1).read_bytes()
+        n = len(self.oplog(repo))
+        hook = helpers.FaultAt("atomic_write:1.json")
+        with (
+            mock.patch.object(fsutil, "_fault_hook", hook),
+            self.assertRaises(OSError),
+        ):
+            repo.describe("x")
+        self.assertEqual(self.commit_file(repo, 1).read_bytes(), data)
+        self.assertEqual(len(self.oplog(repo)), n)
+        self.assertEqual(list((repo.bvc_dir / "tmp").iterdir()), [])
+
+
 class TestBranchOps(HistoryOpsTestCase):
     def test_f1_list_with_fork_and_current(self):
         repo = self.build_branchy()

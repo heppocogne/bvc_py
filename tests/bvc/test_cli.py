@@ -12,6 +12,7 @@ from bvc.model import (
     BranchInfo,
     Commit,
     CommitResult,
+    DescribeResult,
     DiscardResult,
     GcReport,
     MoveResult,
@@ -452,6 +453,21 @@ class TestLogTree(CliTestCase):
         self.assertEqual(cli._wrap("ああa", 3), ["あ", "あa"])
         self.assertEqual(cli._wrap("a\n\nb", 5), ["a", "", "b"])
 
+    def test_f19_describe_multiline(self):
+        # 複数行・幅を超えるメッセージは、log と同じく2行目以降をメッセージの先頭にそろえる
+        c = self.entry("新1行目\n新2行目").commit
+        r = DescribeResult(changed=True, commit=c, previous="旧" + "あ" * 12)
+        self.assertEqual(
+            cli.format_describe(r, width=26),
+            [
+                "版8のメッセージを変更しました",
+                "  旧: 旧あああああああああ",
+                "      あああ",
+                "  新: 新1行目",
+                "      新2行目",
+            ],
+        )
+
 
 class TestHistoryCommands(CliTestCase):
     # M4-1〜M4-4(仕様書 3.6〜3.9節)。観点: F-1, F-12, F-14。
@@ -486,6 +502,28 @@ class TestHistoryCommands(CliTestCase):
         self.assertEqual(self.notes(), {2: ["2", "2 回目"], 1: [], 0: ["x"]})
         code, out, _ = self.bvc("--json", "note", "-m", "j")
         self.assertEqual(json.loads(out)["note"]["text"], "j")
+
+    def test_f19_describe(self):
+        code, out, _ = self.bvc("describe", "-m", "c1 修正", "-r", "1")
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out, "版1のメッセージを変更しました\n  旧: c1\n  新: c1 修正\n"
+        )
+        code, out, _ = self.bvc("log")
+        self.assertIn("c1 修正", out)
+        code, out, _ = self.bvc("describe", "-m", "c1 修正", "-r", "1")
+        self.assertEqual((code, out), (0, "変更なし(版1はすでにそのメッセージです)\n"))
+        code, out, _ = self.bvc("--json", "describe", "-m", "c2 修正")
+        data = json.loads(out)
+        self.assertEqual(
+            (data["changed"], data["commit"]["id"], data["commit"]["message"]),
+            (True, 2, "c2 修正"),
+        )
+        self.assertEqual(data["previous"], "c2")
+        for args in (("describe",), ("describe", "-m", ""), ("describe", "x")):
+            with self.subTest(args=args):
+                self.assertEqual(self.bvc(*args)[0], 2)
+        self.assertEqual(self.bvc("describe", "-m", "x", "-r", "9")[0], 1)
 
     def test_f1_branch(self):
         code, out, _ = self.bvc("branch")

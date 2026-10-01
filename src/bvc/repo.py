@@ -48,6 +48,7 @@ from .model import (
     Commit,
     CommitResult,
     Config,
+    DescribeResult,
     DiscardResult,
     FileRestoreResult,
     GcReport,
@@ -1417,6 +1418,35 @@ class Repo:
         h.log_op(_op_entry("note", {"rev": rev, "id": commit_id}, head))
         return note
 
+    def describe(self, message: str, rev: str = "@") -> DescribeResult:
+        # 版のメッセージを変更する(仕様書 3.16節)。誤字の修正のための操作で、版の内容・親子・ブランチは変えない。
+        # 壊れた版・自動コミットにも実行できる(note と同じ)。版ファイルが読めない版は何も変えずに中止する。
+        # 変更前のメッセージは oplog に残す(版ファイルの書き込みの後に記録する)。
+        if type(message) is not str or not message:
+            raise UsageError("メッセージが空です")
+        h = self._history
+        head = h.head()
+        commit_id = h.resolve(rev, head)
+        if not h.is_readable(commit_id):
+            raise BrokenVersion(
+                f"版{commit_id}は読み込めないため、メッセージを変更できません",
+                commit=commit_id,
+            )
+        previous = h.get(commit_id).message
+        if message == previous:
+            return DescribeResult(
+                changed=False, commit=h.get(commit_id), previous=previous
+            )
+        commit = h.set_message(commit_id, message)
+        h.log_op(
+            _op_entry(
+                "describe",
+                {"rev": rev, "id": commit_id, "previous": previous, "message": message},
+                head,
+            )
+        )
+        return DescribeResult(changed=True, commit=commit, previous=previous)
+
     def branches(self) -> list[BranchInfo]:
         # ブランチの一覧(M4-2、仕様書 3.7節)。有効な版のあるブランチ、名前の付いたブランチ、現在のブランチ。
         h = self._history
@@ -1541,7 +1571,7 @@ class Repo:
         self, rev: str = "@", message: str | None = None, force: bool = False
     ) -> SquashResult:
         # 版(子)をその親に統合する(仕様書 3.14節、設計書 4.13節)。統合した版は、子の内容で
-        # 親の親の子として新しく作り、親と子には削除印を付ける(版は不変なので書き換えない)。
+        # 親の親の子として新しく作り、親と子には削除印を付ける(版の内容・親子は不変なので書き換えない)。
         # 作業ファイルは変えない(統合した版の内容は子と同じ)。未コミットの変更もそのまま残す。
         # 書き込み順は 新しい版 → コメント → HEAD → 削除印 → oplog。途中で止まっても
         # 「同じ内容の版が1つ増えただけ」で、HEAD が削除済みの版を指すことはない。

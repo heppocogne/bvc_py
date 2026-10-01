@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -516,7 +517,7 @@ class History:
         )
         commit_file = self._bvc_dir / "commits" / f"{commit_id}.json"
         if os.path.lexists(os_path(commit_file)):
-            # 版は不変。既存の版ファイルは決して上書きしない
+            # 既存の版ファイルは決して上書きしない(書き換えは set_message の message だけ)
             raise IntegrityError(
                 f"版{commit_id}のファイルが既にあります。counters.jsonと版の記録が一致しません"
             )
@@ -550,6 +551,20 @@ class History:
         makedirs(path.parent)
         append_jsonl(path, {"format": 1, "time": note.time, "text": note.text})
         return note
+
+    def set_message(self, commit_id: int, message: str) -> Commit:
+        # 版のメッセージだけを置き換える(describe、仕様書 3.16節、設計書 2.4節)。読めない版は RevisionError。
+        # 版ファイルは読み直した JSON の message だけを差し替えて書く。Commit から書き直すと、
+        # 壊れた版の不正な tree の項目や、知らない項目が失われるため。
+        self.get(commit_id)
+        commit_file = self._bvc_dir / "commits" / f"{check_id(commit_id)}.json"
+        data = load_json(commit_file, f"版 {commit_id}")
+        commit, _ = _parse_commit(data, commit_id)
+        data["message"] = message
+        atomic_write_json(commit_file, data, self._tmp)
+        commit = replace(commit, message=message)
+        self._commits[commit_id] = commit
+        return commit
 
     def discard(self, commit_id: int) -> None:
         # 削除印を付ける(M4-3、設計書 2.6節)。子は読み込み時のつなぎ直しで親へつながる(4.4節)。

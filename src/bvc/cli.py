@@ -27,6 +27,7 @@ from .fsutil import BVC_DIR
 from .model import (
     BranchInfo,
     Commit,
+    DescribeResult,
     DiscardResult,
     FileRestoreResult,
     GcReport,
@@ -507,6 +508,19 @@ def build_parser() -> argparse.ArgumentParser:
         "-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は@)"
     )
 
+    p = sub.add_parser("describe", help="版のメッセージを変更する(誤字の修正など)")
+    p.add_argument(
+        "-m",
+        "--message",
+        dest="message",
+        required=True,
+        metavar="<メッセージ>",
+        help="新しいメッセージ",
+    )
+    p.add_argument(
+        "-r", dest="rev", default="@", metavar="<版>", help="対象の版(省略時は@)"
+    )
+
     p = sub.add_parser("branch", help="ブランチの一覧・名前の付け外し")
     bsub = p.add_subparsers(
         dest="branch_command", metavar="<操作>", title="操作(省略時は一覧)"
@@ -862,6 +876,17 @@ def _cmd_note(args: argparse.Namespace, start: Path) -> int:
     return EXIT_OK
 
 
+def _cmd_describe(args: argparse.Namespace, start: Path) -> int:
+    with Repo.open(start) as repo:
+        result = repo.describe(args.message, rev=args.rev)
+    if args.json:
+        _print_json(args, result)
+        return EXIT_OK
+    for line in format_describe(result, _log_width()):
+        logger.info(line)
+    return EXIT_OK
+
+
 def _cmd_preset(args: argparse.Namespace, start: Path) -> int:
     # リポジトリを開かない(作業フォルダの外でも使える)。
     plist = load_presets()
@@ -1070,6 +1095,7 @@ _COMMANDS: Final[dict[str, Any]] = {
     "goto": _cmd_move,
     "restore": _cmd_restore,
     "note": _cmd_note,
+    "describe": _cmd_describe,
     "branch": _cmd_branch,
     "preset": _cmd_preset,
     "discard": _cmd_discard,
@@ -1220,6 +1246,24 @@ def format_squash(r: SquashResult) -> list[str]:
             f"  現在位置を版{r.after.at}にしました(作業ファイルは変えていません)"
         )
     return lines
+
+
+def format_describe(r: DescribeResult, width: int) -> list[str]:
+    # 複数行・幅を超えるメッセージは、log と同じく2行目以降をメッセージの先頭にそろえる。
+    if not r.changed:
+        return [f"変更なし(版{r.commit.id}はすでにそのメッセージです)"]
+    return [
+        f"版{r.commit.id}のメッセージを変更しました",
+        *_labeled_lines("  旧: ", r.previous or "(空)", width),
+        *_labeled_lines("  新: ", r.commit.message, width),
+    ]
+
+
+def _labeled_lines(prefix: str, text: str, width: int) -> list[str]:
+    # 見出し prefix の後に text を折り返して並べる。2行目以降は text の先頭にそろえる。
+    w = _width(prefix)
+    body = _wrap(text, max(width - w, LOG_MIN_TEXT))
+    return [prefix + body[0]] + [(" " * w + b).rstrip() for b in body[1:]]
 
 
 def format_gc(r: GcReport) -> str:

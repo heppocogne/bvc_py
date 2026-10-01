@@ -74,7 +74,7 @@ class Head:
 
 @dataclass(frozen=True, slots=True)
 class Commit:
-    # 版(不変レコード)。設計書 2.4節。
+    # 版(不変レコード。message だけは describe で置き換えられる)。設計書 2.4節。
 
     id: int  # 版番号(0 からの単調増加)
     parent: int | None  # 作成時点の親の版番号
@@ -251,6 +251,15 @@ class SquashResult:
     squashed: list[int]  # 削除印を付けた版番号([親, 子])
     before: Head  # 操作前の位置とブランチ
     after: Head  # 操作後の位置とブランチ(現在位置が子なら統合した版へ移る)
+
+
+@dataclass(slots=True)
+class DescribeResult:
+    # describe(版のメッセージの変更)の結果。仕様書 3.16節。
+
+    changed: bool  # メッセージを書き換えたか(同じメッセージなら False)
+    commit: Commit  # 対象の版(変更後のメッセージ)
+    previous: str  # 変更前のメッセージ
 
 
 @dataclass(slots=True)
